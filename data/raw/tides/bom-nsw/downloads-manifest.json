@@ -1,0 +1,122 @@
+﻿[
+    {
+        "year":  2026,
+        "stationId":  "NSW_TP002",
+        "stationName":  "Eden",
+        "filename":  "IDO59001_2026_NSW_TP002.pdf",
+        "sourceUrl":  "https://www.bom.gov.au/ntc/IDO59001/IDO59001_2026_NSW_TP002.pdf",
+        "downloadedAtUtc":  "2026-07-12T03:28:26.9921651Z",
+        "size":  48804,
+        "sha256":  "d063d4060b4321d921d475637605afefd780acfc71703b5cd94a34527af51f99"
+    },
+    {
+        "year":  2026,
+        "stationId":  "NSW_TP004",
+        "stationName":  "Newcastle",
+        "filename":  "IDO59001_2026_NSW_TP004.pdf",
+        "sourceUrl":  "https://www.bom.gov.au/ntc/IDO59001/IDO59001_2026_NSW_TP004.pdf",
+        "downloadedAtUtc":  "2026-07-12T03:28:27.2274974Z",
+        "size":  48801,
+        "sha256":  "c2548e4ff986757794ef197d04d89a6868a2c53412ca991842ab7959e8c382cc"
+    },
+    {
+        "year":  2026,
+        "stationId":  "NSW_TP006",
+        "stationName":  "Port Kembla",
+        "filename":  "IDO59001_2026_NSW_TP006.pdf",
+        "sourceUrl":  "https://www.bom.gov.au/ntc/IDO59001/IDO59001_2026_NSW_TP006.pdf",
+        "downloadedAtUtc":  "2026-07-12T03:28:27.6094891Z",
+        "size":  48821,
+        "sha256":  "477281cdefec6e7f8ee6b331952e91a98fa4ca6c9dfeb57afe79541b5cf3ed05"
+    },
+    {
+        "year":  2026,
+        "stationId":  "NSW_TP007",
+        "stationName":  "Sydney (Fort Denison)",
+        "filename":  "IDO59001_2026_NSW_TP007.pdf",
+        "sourceUrl":  "https://www.bom.gov.au/ntc/IDO59001/IDO59001_2026_NSW_TP007.pdf",
+        "downloadedAtUtc":  "2026-07-12T03:28:27.7822054Z",
+        "size":  48839,
+        "sha256":  "a064d03d8c0752b9587deb19d1fd2ea3c9d17f41de1333079f5c4c3748b6e8fc"
+    },
+    {
+        "year":  2026,
+        "stationId":  "NSW_TP008",
+        "stationName":  "Yamba",
+        "filename":  "IDO59001_2026_NSW_TP008.pdf",
+        "sourceUrl":  "https://www.bom.gov.au/ntc/IDO59001/IDO59001_2026_NSW_TP008.pdf",
+        "downloadedAtUtc":  "2026-07-12T03:28:28.0012556Z",
+        "size":  48731,
+        "sha256":  "404af83ebbf60915aa953de885d39891df2a86d07d51a0b0c9b003d6325d3b67"
+    },
+    {
+        "year":  2026,
+        "stationId":  "NSW_TP001",
+        "stationName":  "Botany Bay",
+        "filename":  "IDO59001_2026_NSW_TP001.pdf",
+        "sourceUrl":  "https://www.bom.gov.au/ntc/IDO59001/IDO59001_2026_NSW_TP001.pdf",
+        "downloadedAtUtc":  "2026-07-12T03:28:28.2012222Z",
+        "size":  48947,
+        "sha256":  "cca92fda65110c9cba1df3835d4b9b50ae836c2029e956c28e73ff80004674f7"
+    },
+    {
+        "year":  2027,
+        "stationId":  "NSW_TP002",
+        "stationName":  "Eden",
+        "filename":  "IDO59001_2027_NSW_TP002.pdf",
+        "sourceUrl":  "https://www.bom.gov.au/ntc/IDO59001/IDO59001_2027_NSW_TP002.pdf",
+        "downloadedAtUtc":  "2026-07-12T03:28:28.4049937Z",
+        "size":  48764,
+        "sha256":  "39fa496c04ae4abf6ae42b49961eefc16f094d6af2281d39dd6ef73c8760b634"
+    },
+    {
+        "year":  2027,
+        "stationId":  "NSW_TP004",
+        "stationName":  "Newcastle",
+        "filename":  "IDO59001_2027_NSW_TP004.pdf",
+        "sourceUrl":  "https://www.bom.gov.au/ntc/IDO59001/IDO59001_2027_NSW_TP004.pdf",
+        "downloadedAtUtc":  "2026-07-12T03:28:28.5681399Z",
+        "size":  48709,
+        "sha256":  "bbc3d69e02ac9f74eb92bb526aab9c273eda9a1c996853a9377a79bd4c4eba7b"
+    },
+    {
+        "year":  2027,
+        "stationId":  "NSW_TP006",
+        "stationName":  "Port Kembla",
+        "filename":  "IDO59001_2027_NSW_TP006.pdf",
+        "sourceUrl":  "https://www.bom.gov.au/ntc/IDO59001/IDO59001_2027_NSW_TP006.pdf",
+        "downloadedAtUtc":  "2026-07-12T03:28:28.7715452Z",
+        "size":  48752,
+        "sha256":  "e84caa1b5c25a57e5ade2040a8b87a0ccf30a87f8567d151dbf683a23a8ad5d7"
+    },
+    {
+        "year":  2027,
+        "stationId":  "NSW_TP007",
+        "stationName":  "Sydney (Fort Denison)",
+        "filename":  "IDO59001_2027_NSW_TP007.pdf",
+        "sourceUrl":  "https://www.bom.gov.au/ntc/IDO59001/IDO59001_2027_NSW_TP007.pdf",
+        "downloadedAtUtc":  "2026-07-12T03:28:28.9530788Z",
+        "size":  48793,
+        "sha256":  "596ed3314482546971fa46619e76782a4bc6c187167400733ad94d02df6143d0"
+    },
+    {
+        "year":  2027,
+        "stationId":  "NSW_TP008",
+        "stationName":  "Yamba",
+        "filename":  "IDO59001_2027_NSW_TP008.pdf",
+        "sourceUrl":  "https://www.bom.gov.au/ntc/IDO59001/IDO59001_2027_NSW_TP008.pdf",
+        "downloadedAtUtc":  "2026-07-12T03:28:29.1247035Z",
+        "size":  48665,
+        "sha256":  "5dfd7e6c92664300d3882d2e572b16bfbcf39c6f89455829286fbf7dec9741c7"
+    },
+    {
+        "year":  2027,
+        "stationId":  "NSW_TP001",
+        "stationName":  "Botany Bay",
+        "filename":  "IDO59001_2027_NSW_TP001.pdf",
+        "sourceUrl":  "https://www.bom.gov.au/ntc/IDO59001/IDO59001_2027_NSW_TP001.pdf",
+        "downloadedAtUtc":  "2026-07-12T03:28:29.3796488Z",
+        "size":  48831,
+        "sha256":  "1b094e9d74768baadc9a6d64c152914bb87c1647d653df48310d9ea8a6cdc276"
+    }
+]

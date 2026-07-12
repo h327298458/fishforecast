@@ -1,0 +1,7 @@
+PRAGMA journal_mode = WAL;
+CREATE TABLE IF NOT EXISTS spots (id TEXT PRIMARY KEY, name TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL, state TEXT NOT NULL, timezone TEXT NOT NULL, spot_type TEXT NOT NULL, water_type TEXT NOT NULL, fishing_method TEXT NOT NULL, target_species TEXT, allow_night INTEGER NOT NULL DEFAULT 0, created_at_utc TEXT NOT NULL, address TEXT);
+CREATE TABLE IF NOT EXISTS forecast_snapshots (id TEXT PRIMARY KEY, spot_id TEXT NOT NULL REFERENCES spots(id), rule_version TEXT NOT NULL, payload_json TEXT NOT NULL, created_at_utc TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS fishing_logs (id TEXT PRIMARY KEY, spot_id TEXT NOT NULL REFERENCES spots(id), forecast_snapshot_id TEXT REFERENCES forecast_snapshots(id), started_at_utc TEXT NOT NULL, ended_at_utc TEXT NOT NULL, method TEXT NOT NULL, bait TEXT, bites INTEGER NOT NULL DEFAULT 0, catches INTEGER NOT NULL DEFAULT 0, kept INTEGER NOT NULL DEFAULT 0, rating INTEGER NOT NULL, gear_issues TEXT, notes TEXT, created_at_utc TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS provider_cache (cache_key TEXT PRIMARY KEY, provider TEXT NOT NULL, payload_json TEXT NOT NULL, fetched_at_utc TEXT NOT NULL, valid_until_utc TEXT NOT NULL, model_version TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_logs_spot_time ON fishing_logs(spot_id, started_at_utc);
+CREATE INDEX IF NOT EXISTS idx_snapshots_spot_time ON forecast_snapshots(spot_id, created_at_utc);

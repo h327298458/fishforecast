@@ -1,0 +1,1 @@
+export const zh={app:'潮汐线',saved:'我的钓点',log:'钓鱼日志',analytics:'数据分析',settings:'设置',search:'搜索钓点（仅限澳大利亚）',todayGo:'今天适合去吗？',caution:'谨慎出钓',safety:'安全性',comfort:'舒适度',condition:'鱼口条件',confidence:'数据可信度',bestWindow:'最佳窗口',start:'开始钓鱼',save:'保存钓点',source:'数据来源',positive:'有利因素',negative:'不利因素',warning:'官方预警核对',disclaimer:'请在出发前核对最新官方预报和当地法规'} as const;

@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    ports: ["8787:8787"]
+    environment:
+      PORT: 8787
+      DATABASE_PATH: /app/data/tideline.db
+      USE_LIVE_WEATHER: "true"
+      EOT20_MODEL_PATH: /models
+      EOT20_MODEL_VERSION: ${EOT20_MODEL_VERSION:-EOT20}
+    volumes:
+      - tideline-data:/app/data
+      - ${EOT20_MODEL_PATH:-./data/tide-models}:/models:ro
+volumes:
+  tideline-data:
