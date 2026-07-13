@@ -9,7 +9,9 @@ services:
       EOT20_MODEL_PATH: /models
       EOT20_MODEL_VERSION: ${EOT20_MODEL_VERSION:-EOT20}
       INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-admin}
-      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:?Set INITIAL_ADMIN_PASSWORD in .env before first start}
+      # Only read during the one-time bootstrap when the users table is empty.
+      # It must remain optional for all later restarts after the operator removes it.
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
       SESSION_DAYS: ${SESSION_DAYS:-7}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-}
