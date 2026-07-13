@@ -243,6 +243,18 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
       mhl?.applicability === "APPLICABLE" && currentHours >= -1 && currentHours <= 3
         ? mhl
         : null;
+    const waveHeightM =
+      mApplicability === "APPLICABLE"
+        ? Math.max(m.waveHeightM ?? 0, mhlCurrent?.significantWaveHeightM ?? 0) || null
+        : null;
+    const waveDataStatus =
+      mApplicability === "NOT_APPLICABLE"
+        ? "NOT_APPLICABLE"
+        : mApplicability === "LOW_CONFIDENCE"
+          ? "LOW_CONFIDENCE"
+          : marineR.status === "rejected" || waveHeightM === null
+            ? "UNAVAILABLE"
+            : "AVAILABLE";
     let overall = 0.96;
     if (warningsR.status === "rejected") overall -= 0.28;
     if (observationR.status === "rejected") overall -= 0.08;
@@ -283,11 +295,8 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
             )
           : null,
       cloudCoverPercent: w.cloudCoverPercent ?? null,
-      waveHeightM:
-        mApplicability !== "NOT_APPLICABLE" &&
-        mApplicability !== "LOW_CONFIDENCE"
-          ? Math.max(m.waveHeightM ?? 0, mhlCurrent?.significantWaveHeightM ?? 0) || null
-          : null,
+      waveHeightM,
+      waveDataStatus,
       swellHeightM:
         mApplicability === "APPLICABLE" ? (m.swellHeightM ?? null) : null,
       swellPeriodSeconds:

@@ -1,4 +1,4 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
@@ -14,9 +14,18 @@ import { applyMigrations } from "./db/applyMigrations.js";
 import { calculateEot20, eot20Status } from "./providers/eot20.js";
 import { nearestOfficialStations } from "./providers/bomOfficialTide.js";
 import { RULE_VERSION } from "./domain/scoring.js";
+import { authenticate, createInvitation, createSession, deleteSession, getSessionUser, listInvitations, registerWithInvitation, revokeInvitation, seedInitialAdmin, type AuthUser } from "./auth.js";
 
 const app = Fastify({ logger: true });
-await app.register(cors, { origin: true });
+const allowedOrigins = new Set((process.env.ALLOWED_ORIGIN ?? "http://localhost:5173").split(",").map((value) => value.trim()).filter(Boolean));
+await app.register(cors, {
+  credentials: true,
+  origin(origin, callback) {
+    // Same-origin production requests do not need CORS.  Explicitly permit only
+    // the local Vite origin or deployment origins configured by the operator.
+    callback(null, !origin || allowedOrigins.has(origin));
+  },
+});
 await app.register(helmet, { contentSecurityPolicy: false });
 await app.register(rateLimit, { max: 80, timeWindow: "1 minute" });
 const dbPath = process.env.DATABASE_PATH ?? "./data/tideline.db";
@@ -24,7 +33,46 @@ mkdirSync(dirname(dbPath), { recursive: true });
 const db = new Database(dbPath);
 db.pragma("foreign_keys = ON");
 applyMigrations(db);
+const seededAdmin = seedInitialAdmin(db);
+if (seededAdmin) app.log.info({ username: seededAdmin.username }, "initial administrator created");
 const geocoder = new PhotonGeocoding();
+
+const sessionCookieName = "tideline_session";
+const secureCookies = process.env.COOKIE_SECURE === "true" || (process.env.COOKIE_SECURE === undefined && process.env.NODE_ENV === "production");
+const parseCookies = (request: FastifyRequest) => {
+  const cookies: Record<string, string> = {};
+  for (const part of String(request.headers.cookie ?? "").split(";")) {
+    const index = part.indexOf("=");
+    if (index < 1) continue;
+    try { cookies[part.slice(0, index).trim()] = decodeURIComponent(part.slice(index + 1)); } catch { /* Ignore malformed cookie values. */ }
+  }
+  return cookies;
+};
+const currentUser = (request: FastifyRequest) => getSessionUser(db, parseCookies(request)[sessionCookieName]);
+const sendSessionCookie = (reply: FastifyReply, token: string, expiresAtUtc: string) => reply.header("set-cookie", `${sessionCookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.max(0, Math.floor((new Date(expiresAtUtc).getTime() - Date.now()) / 1000))}${secureCookies ? "; Secure" : ""}`);
+const clearSessionCookie = (reply: FastifyReply) => reply.header("set-cookie", `${sessionCookieName}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secureCookies ? "; Secure" : ""}`);
+const requireUser = (request: FastifyRequest, reply: FastifyReply): AuthUser | null => {
+  const user = currentUser(request);
+  if (user) return user;
+  reply.code(401).send({ status: "unauthenticated", reason: "AUTH_REQUIRED", data: null });
+  return null;
+};
+const requireAdmin = (request: FastifyRequest, reply: FastifyReply) => {
+  const user = requireUser(request, reply);
+  if (!user || user.role !== "ADMIN") {
+    if (user) reply.code(403).send({ status: "forbidden", reason: "ADMIN_REQUIRED", data: null });
+    return null;
+  }
+  return user;
+};
+const requireSameOrigin = (request: FastifyRequest, reply: FastifyReply) => {
+  const origin = request.headers.origin;
+  if (!origin) return true;
+  const host = request.headers.host;
+  if (origin === `http://${host}` || origin === `https://${host}` || allowedOrigins.has(origin)) return true;
+  reply.code(403).send({ status: "forbidden", reason: "ORIGIN_NOT_ALLOWED", data: null });
+  return false;
+};
 
 const inAustralia = (lat: number, lon: number) =>
   lat >= -44 && lat <= -10 && lon >= 112 && lon <= 154;
@@ -44,6 +92,58 @@ app.get("/api/health", async () => ({
   status: "ok",
   time: new Date().toISOString(),
 }));
+app.get("/api/auth/me", async (request) => {
+  const user = currentUser(request);
+  return user ? { authenticated: true, user } : { authenticated: false, user: null };
+});
+app.post("/api/auth/login", { config: { rateLimit: { max: 8, timeWindow: "15 minutes" } } }, async (request, reply) => {
+  if (!requireSameOrigin(request, reply)) return;
+  const body = request.body as Record<string, unknown>;
+  const user = authenticate(db, body?.username, body?.password);
+  if (!user) return reply.code(401).send({ status: "unauthenticated", reason: "INVALID_CREDENTIALS", data: null });
+  const session = createSession(db, user.id);
+  sendSessionCookie(reply, session.token, session.expiresAtUtc);
+  return { authenticated: true, user };
+});
+app.post("/api/auth/register", { config: { rateLimit: { max: 5, timeWindow: "1 hour" } } }, async (request, reply) => {
+  if (!requireSameOrigin(request, reply)) return;
+  try {
+    const body = request.body as Record<string, unknown>;
+    const user = registerWithInvitation(db, body ?? {});
+    const session = createSession(db, user.id);
+    sendSessionCookie(reply, session.token, session.expiresAtUtc);
+    return reply.code(201).send({ authenticated: true, user });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "REGISTRATION_FAILED";
+    return reply.code(reason === "USERNAME_TAKEN" ? 409 : 400).send({ status: "invalid", reason, data: null });
+  }
+});
+app.post("/api/auth/logout", async (request, reply) => {
+  if (!requireSameOrigin(request, reply)) return;
+  deleteSession(db, parseCookies(request)[sessionCookieName]);
+  clearSessionCookie(reply);
+  return { status: "signed_out" };
+});
+app.get("/api/admin/invitations", async (request, reply) => {
+  if (!requireAdmin(request, reply)) return;
+  return { invitations: listInvitations(db) };
+});
+app.post("/api/admin/invitations", { config: { rateLimit: { max: 20, timeWindow: "1 hour" } } }, async (request, reply) => {
+  if (!requireSameOrigin(request, reply)) return;
+  const admin = requireAdmin(request, reply);
+  if (!admin) return;
+  try {
+    const invitation = createInvitation(db, admin.id, (request.body as Record<string, unknown>) ?? {});
+    return reply.code(201).send({ invitation });
+  } catch (error) {
+    return reply.code(400).send({ status: "invalid", reason: error instanceof Error ? error.message : "INVITATION_CREATE_FAILED", data: null });
+  }
+});
+app.post("/api/admin/invitations/:id/revoke", async (request, reply) => {
+  if (!requireSameOrigin(request, reply) || !requireAdmin(request, reply)) return;
+  const id = String((request.params as { id: string }).id ?? "");
+  return revokeInvitation(db, id) ? { status: "revoked", id } : reply.code(404).send({ status: "not_found", data: null });
+});
 app.get("/api/geocode/search", async (req, reply) => {
   const q = req.query as Record<string, string>;
   const query = String(q.q ?? "").trim();
@@ -81,6 +181,13 @@ app.get("/api/forecast", async (req, reply) => {
     return reply
       .code(400)
       .send({ status: "invalid", reason: "OUTSIDE_AUSTRALIA", data: null });
+  const authenticatedUser = currentUser(req);
+  const requestedSpotId = q.spotId ?? "";
+  if (requestedSpotId) {
+    const ownedSpot = db.prepare("SELECT owner_user_id FROM spots WHERE id=?").get(requestedSpotId) as { owner_user_id: string | null } | undefined;
+    if (ownedSpot && ownedSpot.owner_user_id !== authenticatedUser?.id)
+      return reply.code(404).send({ status: "not_found", data: null });
+  }
   const forecast = await buildForecast(
     {
       id: q.spotId ?? "selected-location",
@@ -98,8 +205,8 @@ app.get("/api/forecast", async (req, reply) => {
     db,
   );
   let snapshotId: string | null = null;
-  const spotId = q.spotId ?? "";
-  if (spotId && db.prepare("SELECT 1 FROM spots WHERE id=?").get(spotId)) {
+  const spotId = requestedSpotId;
+  if (spotId && authenticatedUser && db.prepare("SELECT 1 FROM spots WHERE id=? AND owner_user_id=?").get(spotId, authenticatedUser.id)) {
     snapshotId = randomUUID();
     const snapshot = {
       generatedAtUtc: forecast.generatedAtUtc,
@@ -120,23 +227,30 @@ app.get("/api/forecast", async (req, reply) => {
   return { ...forecast, snapshotId };
 });
 app.get("/api/tides/eot20",async(req,reply)=>{const q=req.query as Record<string,string>;const latitude=Number(q.lat),longitude=Number(q.lon),intervalMinutes=Number(q.intervalMinutes??60);if(!inAustralia(latitude,longitude)||!Number.isFinite(intervalMinutes)||intervalMinutes<10)return reply.code(400).send({status:"invalid",reason:"INVALID_TIDE_QUERY",provider:"EOT20"});try{const data=await calculateEot20({latitude,longitude,startUtc:q.startUtc??new Date().toISOString(),endUtc:q.endUtc??new Date(Date.now()+7*86400000).toISOString(),intervalMinutes,spotType:q.spotType??"beach",waterType:q.waterType});return{status:"available",provider:"EOT20",data};}catch(error){const reason=error instanceof Error?error.message:"EOT20_FAILED";return reply.code(reason==="EOT20_NOT_APPLICABLE"?422:503).send({status:"unavailable",reason,provider:"EOT20"});}});
-app.get("/api/spots", async () =>
-  db
+app.get("/api/spots", async (request, reply) => {
+  const user = requireUser(request, reply);
+  if (!user) return;
+  return db
     .prepare(
-      "SELECT s.id,s.name,COALESCE(s.address,'') AS address,s.latitude,s.longitude,s.state,s.timezone,s.spot_type AS spotType,s.water_type AS waterType,s.fishing_method AS fishingMethod,s.target_species AS targetSpecies,s.allow_night AS allowNight,s.created_at_utc AS createdAtUtc,COALESCE(p.preferred_tide_source,'BOM_OFFICIAL') AS preferredTideSource FROM spots s LEFT JOIN spot_environment_preferences p ON p.spot_id=s.id ORDER BY s.created_at_utc DESC",
+      "SELECT s.id,s.name,COALESCE(s.address,'') AS address,s.latitude,s.longitude,s.state,s.timezone,s.spot_type AS spotType,s.water_type AS waterType,s.fishing_method AS fishingMethod,s.target_species AS targetSpecies,s.allow_night AS allowNight,s.created_at_utc AS createdAtUtc,COALESCE(p.preferred_tide_source,'BOM_OFFICIAL') AS preferredTideSource FROM spots s LEFT JOIN spot_environment_preferences p ON p.spot_id=s.id WHERE s.owner_user_id=? ORDER BY s.created_at_utc DESC",
     )
-    .all(),
-);
+    .all(user.id);
+});
 app.get("/api/spots/:id", async (req, reply) => {
+  const user = requireUser(req, reply);
+  if (!user) return;
   const { id } = req.params as { id: string };
   const spot = db
     .prepare(
-      "SELECT id,name,COALESCE(address,'') AS address,latitude,longitude,state,timezone,spot_type AS spotType,water_type AS waterType,fishing_method AS fishingMethod,target_species AS targetSpecies,allow_night AS allowNight,created_at_utc AS createdAtUtc FROM spots WHERE id=?",
+      "SELECT id,name,COALESCE(address,'') AS address,latitude,longitude,state,timezone,spot_type AS spotType,water_type AS waterType,fishing_method AS fishingMethod,target_species AS targetSpecies,allow_night AS allowNight,created_at_utc AS createdAtUtc FROM spots WHERE id=? AND owner_user_id=?",
     )
-    .get(id);
+    .get(id, user.id);
   return spot ?? reply.code(404).send({ status: "not_found", data: null });
 });
 app.post("/api/spots", async (req, reply) => {
+  if (!requireSameOrigin(req, reply)) return;
+  const user = requireUser(req, reply);
+  if (!user) return;
   const b = req.body as Record<
     string,
     string | number | boolean | null | undefined
@@ -149,8 +263,11 @@ app.post("/api/spots", async (req, reply) => {
       .send({ status: "invalid", reason: "OUTSIDE_AUSTRALIA", data: null });
   const id = String(b.id ?? randomUUID()),
     now = new Date().toISOString();
+  const existing = db.prepare("SELECT owner_user_id FROM spots WHERE id=?").get(id) as { owner_user_id: string | null } | undefined;
+  if (existing && existing.owner_user_id !== user.id)
+    return reply.code(404).send({ status: "not_found", data: null });
   db.prepare(
-    `INSERT INTO spots (id,name,address,latitude,longitude,state,timezone,spot_type,water_type,fishing_method,target_species,allow_night,created_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,address=excluded.address,latitude=excluded.latitude,longitude=excluded.longitude,state=excluded.state,timezone=excluded.timezone,spot_type=excluded.spot_type,water_type=excluded.water_type,fishing_method=excluded.fishing_method,target_species=excluded.target_species,allow_night=excluded.allow_night`,
+    `INSERT INTO spots (id,name,address,latitude,longitude,state,timezone,spot_type,water_type,fishing_method,target_species,allow_night,created_at_utc,owner_user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,address=excluded.address,latitude=excluded.latitude,longitude=excluded.longitude,state=excluded.state,timezone=excluded.timezone,spot_type=excluded.spot_type,water_type=excluded.water_type,fishing_method=excluded.fishing_method,target_species=excluded.target_species,allow_night=excluded.allow_night`,
   ).run(
     id,
     b.name,
@@ -165,20 +282,24 @@ app.post("/api/spots", async (req, reply) => {
     b.targetSpecies ?? null,
     b.allowNight ? 1 : 0,
     now,
+    user.id,
   );
   return reply
     .code(201)
     .send(
       db
         .prepare(
-          "SELECT id,name,address,latitude,longitude,state,timezone,spot_type AS spotType,fishing_method AS fishingMethod FROM spots WHERE id=?",
+          "SELECT id,name,address,latitude,longitude,state,timezone,spot_type AS spotType,fishing_method AS fishingMethod FROM spots WHERE id=? AND owner_user_id=?",
         )
-        .get(id),
+        .get(id, user.id),
     );
 });
 app.put("/api/spots/:id/environment-preferences", async (req, reply) => {
+  if (!requireSameOrigin(req, reply)) return;
+  const user = requireUser(req, reply);
+  if (!user) return;
   const { id } = req.params as { id: string };
-  const spot = db.prepare("SELECT latitude,longitude,state FROM spots WHERE id=?").get(id) as {latitude:number;longitude:number;state:string}|undefined;
+  const spot = db.prepare("SELECT latitude,longitude,state FROM spots WHERE id=? AND owner_user_id=?").get(id, user.id) as {latitude:number;longitude:number;state:string}|undefined;
   if (!spot)
     return reply.code(404).send({ status: "not_found", data: null });
   const b = req.body as Record<
@@ -212,17 +333,22 @@ app.put("/api/spots/:id/environment-preferences", async (req, reply) => {
   );
   return { status: "saved", spotId: id, preferredTideSource: source };
 });
-app.get("/api/logs", async () =>
-  db
+app.get("/api/logs", async (request, reply) => {
+  const user = requireUser(request, reply);
+  if (!user) return;
+  return db
     .prepare(
-      "SELECT id,spot_id AS spotId,forecast_snapshot_id AS forecastSnapshotId,started_at_utc AS startedAtUtc,ended_at_utc AS endedAtUtc,method,bait,bites,catches,kept,rating,gear_issues AS gearIssues,notes,details_json AS detailsJson,comparison_json AS comparisonJson,created_at_utc AS createdAtUtc FROM fishing_logs ORDER BY started_at_utc DESC LIMIT 100",
+      "SELECT l.id,l.spot_id AS spotId,l.forecast_snapshot_id AS forecastSnapshotId,l.started_at_utc AS startedAtUtc,l.ended_at_utc AS endedAtUtc,l.method,l.bait,l.bites,l.catches,l.kept,l.rating,l.gear_issues AS gearIssues,l.notes,l.details_json AS detailsJson,l.comparison_json AS comparisonJson,l.created_at_utc AS createdAtUtc FROM fishing_logs l JOIN spots s ON s.id=l.spot_id WHERE s.owner_user_id=? ORDER BY l.started_at_utc DESC LIMIT 100",
     )
-    .all(),
-);
+    .all(user.id);
+});
 app.post("/api/logs", async (req, reply) => {
+  if (!requireSameOrigin(req, reply)) return;
+  const user = requireUser(req, reply);
+  if (!user) return;
   const b = req.body as Record<string, unknown>;
   const spotId = String(b.spotId ?? "");
-  if (!spotId || !db.prepare("SELECT 1 FROM spots WHERE id=?").get(spotId))
+  if (!spotId || !db.prepare("SELECT 1 FROM spots WHERE id=? AND owner_user_id=?").get(spotId, user.id))
     return reply
       .code(409)
       .send({
@@ -235,7 +361,7 @@ app.post("/api/logs", async (req, reply) => {
   const detailKeys = ["effectiveMinutes","blank","species","maxLengthCm","maxWeightKg","lure","waterDepth","castingDistanceM","moveCount","snagCount","tangleCount","lineBreakCount","baitLossCount","boatTraffic","crowdTraffic","weatherInterrupted"];
   const details = Object.fromEntries(detailKeys.filter((key) => b[key] !== undefined).map((key) => [key, b[key]]));
   const gearProblem = Boolean(Number(b.snagCount ?? 0) || Number(b.tangleCount ?? 0) || Number(b.lineBreakCount ?? 0) || Number(b.baitLossCount ?? 0));
-  const snapshot = b.forecastSnapshotId ? db.prepare("SELECT payload_json FROM forecast_snapshots WHERE id=?").get(String(b.forecastSnapshotId)) as { payload_json?: string } | undefined : undefined;
+  const snapshot = b.forecastSnapshotId ? db.prepare("SELECT fs.payload_json FROM forecast_snapshots fs JOIN spots s ON s.id=fs.spot_id WHERE fs.id=? AND s.owner_user_id=?").get(String(b.forecastSnapshotId), user.id) as { payload_json?: string } | undefined : undefined;
   const comparison = { snapshotAvailable: Boolean(snapshot), actualBites: Number(b.bites ?? 0), actualCatches: Number(b.catches ?? 0), blank: Boolean(b.blank), trainingEligible: !gearProblem, reason: gearProblem ? "EQUIPMENT_ISSUES_PRESENT" : "ENVIRONMENT_RESULT_ELIGIBLE", tideSource: snapshot ? JSON.parse(String(snapshot.payload_json ?? "{}")).tides?.actualTideSourceUsed ?? null : null };
   db.prepare(
     "INSERT INTO fishing_logs (id,spot_id,forecast_snapshot_id,started_at_utc,ended_at_utc,method,bait,bites,catches,kept,rating,gear_issues,notes,created_at_utc,details_json,comparison_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -250,12 +376,14 @@ app.post("/api/logs", async (req, reply) => {
   );
   return reply.code(201).send({ id });
 });
-app.get("/api/analytics", async () => {
+app.get("/api/analytics", async (request, reply) => {
+  const user = requireUser(request, reply);
+  if (!user) return;
   const row = db
     .prepare(
-      "SELECT COUNT(*) sessions, COALESCE(SUM(catches),0) catches, COALESCE(SUM(bites),0) bites, COALESCE(AVG(rating),0) rating, COALESCE(SUM(CASE WHEN catches=0 THEN 1 ELSE 0 END),0) blanks FROM fishing_logs",
+      "SELECT COUNT(*) sessions, COALESCE(SUM(l.catches),0) catches, COALESCE(SUM(l.bites),0) bites, COALESCE(AVG(l.rating),0) rating, COALESCE(SUM(CASE WHEN l.catches=0 THEN 1 ELSE 0 END),0) blanks FROM fishing_logs l JOIN spots s ON s.id=l.spot_id WHERE s.owner_user_id=?",
     )
-    .get() as {
+    .get(user.id) as {
     sessions: number;
     catches: number;
     bites: number;

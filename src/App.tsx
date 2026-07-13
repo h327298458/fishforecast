@@ -15,13 +15,16 @@ import {
 } from "lucide-react";
 import {
   getAnalytics,
+  getCurrentUser,
   getForecast,
   getLogs,
   getSpots,
+  logout,
   reverseLocation,
   saveEnvironmentPreferences,
   saveSpot,
 } from "./api";
+import type { AuthUser } from "./api";
 import type {
   FishingLog,
   Forecast,
@@ -36,15 +39,24 @@ import { TideChart, WindChart } from "./components/Charts";
 import { LogModal } from "./components/LogModal";
 import { SystemStatusPage } from "./components/SystemStatusPage";
 import { EnvironmentEvidence } from "./components/EnvironmentEvidence";
+import { AuthPage } from "./components/AuthPage";
+import { InvitationManager } from "./components/InvitationManager";
 import "./styles.css";
 
 type View = "forecast" | "logs" | "analytics" | "settings";
 export default function App() {
   if (window.location.pathname === "/system-status")
     return <SystemStatusPage />;
-  return <ForecastApp />;
+  return <AuthenticatedApp />;
 }
-function ForecastApp() {
+function AuthenticatedApp() {
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [checking, setChecking] = useState(true);
+  useEffect(() => { getCurrentUser().then((result) => setUser(result.user)).catch(() => setUser(null)).finally(() => setChecking(false)); }, []);
+  if (checking) return <div className="auth-loading"><LoaderCircle className="spin" />正在验证登录状态…</div>;
+  return user ? <ForecastApp user={user} onSignedOut={() => setUser(null)} /> : <AuthPage onAuthenticated={setUser} />;
+}
+function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () => void }) {
   const [point, setPoint] = useState<LocationPoint | null>(null),
     [saved, setSaved] = useState<SavedSpot[]>([]),
     [forecast, setForecast] = useState<Forecast | null>(null),
@@ -64,6 +76,7 @@ function ForecastApp() {
       number | boolean
     > | null>(null);
   const reverseRequest = useRef<AbortController | null>(null);
+  async function signOut() { try { await logout(); } finally { onSignedOut(); } }
   const load = useCallback(
     async (
       target: LocationPoint,
@@ -276,7 +289,8 @@ function ForecastApp() {
         </nav>
         <div className="header-actions">
           <Bell />
-          <span className="avatar">钓</span>
+          <span className="avatar" title={user.role}>{user.username.slice(0, 1).toUpperCase()}</span>
+          <button className="logout-button" onClick={() => void signOut()}>退出</button>
         </div>
       </header>
       <main>
@@ -297,7 +311,7 @@ function ForecastApp() {
           ) : view === "analytics" ? (
             <AnalyticsView data={analytics} />
           ) : view === "settings" ? (
-            <SettingsView />
+            <SettingsView user={user} />
           ) : loading ? (
             <div className="loading">
               <LoaderCircle />
@@ -578,7 +592,7 @@ function AnalyticsView({
     </div>
   );
 }
-function SettingsView() {
+function SettingsView({ user }: { user: AuthUser }) {
   return (
     <div className="secondary-view">
       <h1>设置与系统状态</h1>
@@ -586,6 +600,7 @@ function SettingsView() {
       <a className="status-link" href="/system-status">
         打开 Provider 与降级状态审计页 →
       </a>
+      {user.role === "ADMIN" ? <InvitationManager /> : null}
     </div>
   );
 }

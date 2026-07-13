@@ -11,12 +11,15 @@ export const weightedScore = (items: Array<{ value: number | null; weight: numbe
 const inverseLinear = (value: number | null, ideal: number, bad: number) => value === null ? null : clamp(100 - Math.max(0, value - ideal) * (100 / (bad - ideal)));
 
 export function scoreHour(env: HourlyEnvironment, spotType = 'wharf'): ScoreResult {
-  const missing = Object.entries({ wind: env.windSpeedKmh, gust: env.windGustKmh, pressure: env.pressureHpa, tide: env.tideHeightM, wave: env.waveHeightM }).filter(([,v]) => v === null).map(([k]) => k);
+  // A harbour, estuary or freshwater point deliberately does not receive an
+  // offshore wave value.  That is an applicability decision, not missing data.
+  const waveIsDeliberatelyExcluded = env.waveDataStatus === 'LOW_CONFIDENCE' || env.waveDataStatus === 'NOT_APPLICABLE';
+  const missing = Object.entries({ wind: env.windSpeedKmh, gust: env.windGustKmh, pressure: env.pressureHpa, tide: env.tideHeightM, wave: waveIsDeliberatelyExcluded ? 0 : env.waveHeightM }).filter(([,v]) => v === null).map(([k]) => k);
   let safetyStatus: SafetyStatus = 'SAFE';
   const hardBlock = env.warningSeverity === 'severe' || (spotType === 'rock' && (env.waveHeightM ?? 99) > 2.2) || (env.windGustKmh ?? 0) > 65;
   if (hardBlock) safetyStatus = 'NOT_RECOMMENDED';
   else if (env.warningSeverity === 'unknown') safetyStatus = 'UNKNOWN';
-  else if (env.warningSeverity === 'moderate' || (env.windGustKmh ?? 0) > 45 || (spotType === 'rock' && env.waveHeightM === null)) safetyStatus = 'HIGH_RISK';
+  else if (env.warningSeverity === 'moderate' || (env.windGustKmh ?? 0) > 45 || (spotType === 'rock' && env.waveDataStatus === 'UNAVAILABLE')) safetyStatus = 'HIGH_RISK';
   else if ((env.windSpeedKmh ?? 0) > 25 || (env.waveHeightM ?? 0) > 1.8) safetyStatus = 'CAUTION';
   const safetyBase = weightedScore([{ value: inverseLinear(env.windSpeedKmh, 12, 55), weight: 0.4 }, { value: inverseLinear(env.windGustKmh, 20, 70), weight: 0.35 }, { value: inverseLinear(env.waveHeightM, spotType === 'rock' ? .8 : 1.2, 3), weight: 0.25 }]);
   const safetyScore = hardBlock ? Math.min(25, safetyBase) : env.warningSeverity === 'unknown' ? Math.min(60,safetyBase) : safetyBase;

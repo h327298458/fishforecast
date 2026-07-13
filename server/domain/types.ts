@@ -6,6 +6,8 @@ export type HourlyEnvironment = {
   windSpeedKmh: number | null; windGustKmh: number | null; windDirectionDeg: number | null;
   pressureHpa: number | null; pressureTrendHpa3h: number | null; cloudCoverPercent: number | null;
   waveHeightM: number | null; swellHeightM: number | null; swellPeriodSeconds: number | null;
+  /** Distinguishes an unavailable provider from a deliberate applicability exclusion. */
+  waveDataStatus?: 'AVAILABLE'|'LOW_CONFIDENCE'|'NOT_APPLICABLE'|'UNAVAILABLE';
   modelSeaLevelTrendM: number | null;
   tideHeightM: number | null; tidePhase: 'rising'|'falling'|'slack'|null;
   warningSeverity: 'none'|'minor'|'moderate'|'severe'|'unknown'; daylightState: 'day'|'night';

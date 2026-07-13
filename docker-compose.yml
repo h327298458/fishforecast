@@ -8,6 +8,11 @@ services:
       USE_LIVE_WEATHER: "true"
       EOT20_MODEL_PATH: /models
       EOT20_MODEL_VERSION: ${EOT20_MODEL_VERSION:-EOT20}
+      INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-admin}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:?Set INITIAL_ADMIN_PASSWORD in .env before first start}
+      SESSION_DAYS: ${SESSION_DAYS:-7}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-}
     volumes:
       - tideline-data:/app/data
       - ${EOT20_MODEL_PATH:-./data/tide-models}:/models:ro
