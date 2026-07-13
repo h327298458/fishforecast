@@ -50,12 +50,19 @@ const marineApplicability = (spotType: string, waterType: string) =>
         /harbour|estuary|river|bay|enclosed/i.test(waterType)
       ? "LOW_CONFIDENCE"
       : "APPLICABLE";
+const withProviderTimeout = <T>(promise: Promise<T>, provider: string, milliseconds = 6_000) => new Promise<T>((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error(`${provider}_TIMEOUT`)), milliseconds);
+  promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
+});
 
 export async function buildForecast(input: Input = {}, db?: Database.Database) {
   const spot = { ...baseSpot, ...input };
   const point = { latitude: spot.latitude, longitude: spot.longitude };
-  const start = new Date(),
-    end = new Date(start.getTime() + 7 * 86_400_000);
+  // EOT20 cache keys contain the requested range. Aligning forecast ranges to
+  // the UTC hour makes repeat requests within that hour reuse the same result.
+  const start = new Date();
+  start.setUTCMinutes(0, 0, 0);
+  const end = new Date(start.getTime() + 7 * 86_400_000);
   const weatherProvider = new OpenMeteoWeather(),
     marineProvider = new OpenMeteoMarine();
   const preference =
@@ -106,27 +113,34 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
             "根据官方10分钟预测序列提取高低潮事件；小时曲线为事件间显示插值。",
         }
       : null;
+  // EOT20 starts a Python process and loads NetCDF constituents. Do not make an
+  // official-port forecast wait for it merely to render an optional comparison.
+  // The model is calculated when selected for scoring or requested from its own API.
+  const eot20Task =
+    preferredTideSource === "EOT20_MODEL"
+      ? calculateEot20({
+          ...point,
+          startUtc: start.toISOString(),
+          endUtc: end.toISOString(),
+          intervalMinutes: 60,
+          spotType: spot.spotType,
+          waterType: spot.waterType,
+          timezone: spot.timezone,
+        })
+      : Promise.resolve(null);
   const tasks = [
-    weatherProvider.getHourly(point, 7, spot.timezone),
+    withProviderTimeout(weatherProvider.getHourly(point, 7, spot.timezone), "WEATHER", 12_000),
     marineApplicability(spot.spotType, spot.waterType) === "NOT_APPLICABLE"
       ? Promise.resolve([])
-      : marineProvider.getHourly(point, 7),
-    getBomWarnings(spot.state),
-    getBomObservation(point, spot.state),
-    getBomMarineForecast(point, spot.state),
-    calculateEot20({
-      ...point,
-      startUtc: start.toISOString(),
-      endUtc: end.toISOString(),
-      intervalMinutes: 60,
-      spotType: spot.spotType,
-      waterType: spot.waterType,
-      timezone: spot.timezone,
-    }),
-    getRainContext(point),
-    getBrooklynHydrology(point),
+      : withProviderTimeout(marineProvider.getHourly(point, 7), "MARINE"),
+    withProviderTimeout(getBomWarnings(spot.state), "BOM_WARNINGS"),
+    withProviderTimeout(getBomObservation(point, spot.state), "BOM_OBSERVATION"),
+    withProviderTimeout(getBomMarineForecast(point, spot.state), "BOM_MARINE"),
+    eot20Task,
+    withProviderTimeout(getRainContext(point), "RAIN_CONTEXT"),
+    withProviderTimeout(getBrooklynHydrology(point), "WATER_DATA"),
     spot.state === "NSW"
-      ? getNswMhlWaveObservation(point, spot.spotType, spot.waterType)
+      ? withProviderTimeout(getNswMhlWaveObservation(point, spot.spotType, spot.waterType), "NSW_MHL")
       : Promise.resolve(null),
   ] as const;
   const [
@@ -418,7 +432,8 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
       official,
       model: eot20 ?? {
         ...eot20Status(),
-        status: "UNAVAILABLE",
+        calculated: false,
+        reason: "ON_DEMAND_MODEL_NOT_REQUESTED",
         applicability: eot20Applicability(spot.spotType, spot.waterType),
       },
       comparison:

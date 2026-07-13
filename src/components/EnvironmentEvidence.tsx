@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Forecast, TideSource } from "../types";
+import { getEot20Tide, type Eot20Model } from "../api";
 const time = (value: string | undefined, timezone: string) =>
   value
     ? new Intl.DateTimeFormat("zh-CN", {
@@ -14,37 +15,62 @@ type Mode = "official" | "model" | "compare";
 export function EnvironmentEvidence({
   forecast,
   timezone,
+  spotType,
   onTideSource,
   onOfficialSettings,
 }: {
   forecast: Forecast;
   timezone: string;
+  spotType: string;
   onTideSource: (source: TideSource) => void;
   onOfficialSettings: (options: Record<string, unknown>) => void;
 }) {
   const [mode, setMode] = useState<Mode>("official");
-  const { official, model, comparison } = forecast.tides;
+  const [onDemandModel, setOnDemandModel] = useState<Eot20Model | null>(null);
+  const [modelLoading, setModelLoading] = useState(false);
+  const [modelError, setModelError] = useState("");
+  useEffect(() => { setOnDemandModel(null); setModelError(""); }, [forecast.spot.id, spotType]);
+  const { official, model: initialModel, comparison: storedComparison } = forecast.tides;
+  const model = onDemandModel ?? initialModel;
   const modelAvailable = Boolean(model.events);
+  const modelSelectable = modelAvailable || initialModel.status === "REAL";
   const officialAvailable = Boolean(official?.events.length);
+  const comparison = (() => {
+    if (storedComparison || !official?.events.length || !model.events?.length) return storedComparison;
+    const officialHigh = official.events.find((event) => event.type === "HIGH");
+    const officialLow = official.events.find((event) => event.type === "LOW");
+    const modelHigh = model.events.find((event) => event.type === "HIGH");
+    const modelLow = model.events.find((event) => event.type === "LOW");
+    if (!officialHigh || !modelHigh) return null;
+    return { officialHigh, modelHigh, officialLow: officialLow ?? null, modelLow: modelLow ?? null, timeDifferenceMinutes: Math.round(Math.abs(new Date(officialHigh.timeUtc).getTime() - new Date(modelHigh.timestampUtc).getTime()) / 60_000), heightDifferenceM: Math.abs(officialHigh.heightM - modelHigh.heightM), lowTimeDifferenceMinutes: officialLow && modelLow ? Math.round(Math.abs(new Date(officialLow.timeUtc).getTime() - new Date(modelLow.timestampUtc).getTime()) / 60_000) : null, officialConfidence: 0.9, modelConfidence: Number(model.confidence ?? 0), actualTideSourceUsed: forecast.tides.actualTideSourceUsed };
+  })();
+  async function selectMode(next: Mode) {
+    setMode(next);
+    if (next === "official" || modelAvailable || !modelSelectable || modelLoading) return;
+    setModelLoading(true); setModelError("");
+    try { setOnDemandModel(await getEot20Tide(forecast.spot, spotType)); }
+    catch (error) { setModelError(error instanceof Error ? error.message : "EOT20_UNAVAILABLE"); }
+    finally { setModelLoading(false); }
+  }
   return (
     <div className="evidence-grid">
       <section className="evidence-card tide-evidence">
         <div className="mode-tabs" aria-label="潮汐显示模式">
           <button
             className={mode === "official" ? "active" : ""}
-            onClick={() => setMode("official")}
+            onClick={() => void selectMode("official")}
           >
             官方参考港
           </button>
           <button
             className={mode === "model" ? "active" : ""}
-            onClick={() => setMode("model")}
+            onClick={() => void selectMode("model")}
           >
             经纬度模型
           </button>
           <button
             className={mode === "compare" ? "active" : ""}
-            onClick={() => setMode("compare")}
+            onClick={() => void selectMode("compare")}
           >
             对比模式
           </button>
@@ -70,7 +96,7 @@ export function EnvironmentEvidence({
             用官方源评分
           </button>
           <button
-            disabled={!modelAvailable}
+            disabled={!modelSelectable}
             className={
               forecast.tides.preferredSource === "EOT20_MODEL" ? "active" : ""
             }
@@ -120,7 +146,7 @@ export function EnvironmentEvidence({
             </div>
           ) : (
             <p className="unavailable">
-              EOT20：{String(model.reason ?? model.status ?? "UNAVAILABLE")}
+              EOT20：{modelLoading ? "正在按需计算模型…" : modelError || String((model as Record<string, unknown>).reason ?? (model as Record<string, unknown>).status ?? "UNAVAILABLE")}
               。缺少或损坏模型时不会生成假潮汐。
             </p>
           )

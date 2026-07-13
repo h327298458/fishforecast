@@ -31,6 +31,7 @@ import type {
   LocationPoint,
   SavedSpot,
   TideSource,
+  Window,
 } from "./types";
 import { MapPanel } from "./components/MapPanel";
 import { MapView } from "./components/MapView";
@@ -409,13 +410,8 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
                 </span>
               </div>
               <MetricRow score={best.score} />
+              <RecommendedWindows windows={current.windows} timezone={point.timezone} />
               <ProviderStrip status={forecast.providerStatus} />
-              <EnvironmentEvidence
-                forecast={forecast}
-                timezone={point.timezone}
-                onTideSource={(source) => void chooseTideSource(source)}
-                onOfficialSettings={(options) => void saveOfficialSettings(options)}
-              />
               <div className="day-tabs" role="tablist">
                 {forecast.days.map((d, i) => (
                   <button
@@ -474,6 +470,16 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
                   开始钓鱼
                 </button>
               </div>
+              <details className="environment-details">
+                <summary>查看潮汐、警告、实况、海域与水文依据</summary>
+                <EnvironmentEvidence
+                  forecast={forecast}
+                  timezone={point.timezone}
+                  spotType={spotType}
+                  onTideSource={(source) => void chooseTideSource(source)}
+                  onOfficialSettings={(options) => void saveOfficialSettings(options)}
+                />
+              </details>
             </>
           ) : (
             <div className="empty-workspace">
@@ -527,6 +533,10 @@ function ProviderStrip({ status }: { status: Forecast["providerStatus"] }) {
       ))}
     </div>
   );
+}
+function RecommendedWindows({ windows, timezone }: { windows: Window[]; timezone: string }) {
+  const format = (value: string) => new Intl.DateTimeFormat("zh-CN", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
+  return <section className="recommended-windows"><div><h2>推荐出钓窗口</h2><small>仅显示安全状态为 SAFE、环境条件至少 72 分、数据可信度至少 55 分的连续 2–4 小时最佳片段。</small></div>{windows.length ? <div className="window-list">{windows.map((window) => <article key={window.startUtc}><b>{format(window.startUtc)}–{format(window.endUtc)}</b><span>环境条件 {window.averageScore}</span></article>)}</div> : <p>今天没有满足安全、可信度和环境阈值的连续窗口。</p>}</section>;
 }
 function LogsView({ logs }: { logs: FishingLog[] }) {
   return (

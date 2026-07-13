@@ -30,14 +30,25 @@ export function scoreHour(env: HourlyEnvironment, spotType = 'wharf'): ScoreResu
   return { safetyStatus, safetyScore: clamp(safetyScore), comfortScore: clamp(comfortScore), fishingConditionScore: clamp(fishingConditionScore), dataConfidenceScore: clamp(env.dataQuality.overall * 100), positives, negatives, missing, ruleVersion: RULE_VERSION };
 }
 
-export function mergeWindows(hours: Array<{ timestampUtc: string; score: ScoreResult }>, minScore = 68) {
+export function mergeWindows(hours: Array<{ timestampUtc: string; score: ScoreResult }>, minScore = 72) {
   const windows: Array<{ startUtc: string; endUtc: string; averageScore: number }> = [];
   let current: typeof hours = [];
   for (const hour of hours) {
-    const usable = hour.score.fishingConditionScore >= minScore && hour.score.dataConfidenceScore >= 45 && !['UNKNOWN','HIGH_RISK','NOT_RECOMMENDED'].includes(hour.score.safetyStatus);
+    const usable = hour.score.fishingConditionScore >= minScore && hour.score.dataConfidenceScore >= 55 && hour.score.safetyStatus === 'SAFE';
     if (usable) current.push(hour);
     if ((!usable || hour === hours.at(-1)) && current.length) {
-      if (current.length >= 2) windows.push({ startUtc: current[0].timestampUtc, endUtc: current.at(-1)!.timestampUtc, averageScore: Math.round(current.reduce((s,h)=>s+h.score.fishingConditionScore,0)/current.length) });
+      // A very long run is not an actionable recommendation. Pick its best
+      // two-to-four-hour segment rather than labelling half a day as a window.
+      if (current.length >= 2) {
+        let best: typeof current | null = null;
+        const targetLength = Math.min(current.length, 5);
+        for (let startIndex = 0; startIndex < current.length - 1; startIndex += 1) {
+          const candidate = current.slice(startIndex, startIndex + targetLength);
+          if (candidate.length !== targetLength) continue;
+          if (!best || candidate.reduce((sum, item) => sum + item.score.fishingConditionScore, 0) / candidate.length > best.reduce((sum, item) => sum + item.score.fishingConditionScore, 0) / best.length) best = candidate;
+        }
+        if (best) windows.push({ startUtc: best[0].timestampUtc, endUtc: best.at(-1)!.timestampUtc, averageScore: Math.round(best.reduce((sum,item)=>sum+item.score.fishingConditionScore,0)/best.length) });
+      }
       current = [];
     }
   }

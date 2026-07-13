@@ -6,3 +6,10 @@ it('does not describe deliberately excluded harbour wave data as missing',()=>{
   const score=scoreHour({...env,waveHeightM:null,waveDataStatus:'LOW_CONFIDENCE'});
   expect(score.missing).not.toContain('wave');
 });
+
+it('limits a long safe run to its best actionable four-hour window',()=>{
+  const safe=(value:number)=>({timestampUtc:`2026-01-01T${String(value).padStart(2,'0')}:00:00Z`,score:{...scoreHour(env),fishingConditionScore:72+value,dataConfidenceScore:80,safetyStatus:'SAFE' as const}});
+  const windows=mergeWindows([0,1,2,3,4,5,6].map(safe));
+  expect(windows).toHaveLength(1);
+  expect((new Date(windows[0].endUtc).getTime()-new Date(windows[0].startUtc).getTime())/3_600_000).toBeLessThanOrEqual(4);
+});
