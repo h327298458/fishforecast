@@ -1,0 +1,3 @@
+import { getBomObservation } from '../server/providers/bom.js';
+const places=[{name:'Brooklyn NSW',latitude:-33.55,longitude:151.22,state:'NSW'},{name:'Walsh Bay NSW',latitude:-33.855,longitude:151.203,state:'NSW'},{name:'Bondi Beach NSW',latitude:-33.8915,longitude:151.2767,state:'NSW'}];
+const results=[];for(const place of places){const observation=await getBomObservation(place,place.state);results.push({place:place.name,selected:observation.selected,candidateCount:observation.candidates.length,candidates:observation.candidates.map(candidate=>({stationName:candidate.stationName,distanceKm:Number(candidate.distanceKm.toFixed(1)),ageMinutes:candidate.ageMinutes,fieldCompleteness:candidate.fieldCompleteness}))});}console.log(JSON.stringify(results,null,2));

@@ -3,6 +3,9 @@ dist/
 data/*.db*
 data/tide-models/
 data/tide-model-cache/
+data/eot20-cache/
+data/eot20-test-cache/
+data/*.log
 .env
 .venv-eot20/
 playwright-report/

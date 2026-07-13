@@ -4,6 +4,8 @@ import {
   getBomMarineForecast,
   getBomObservation,
   getBomWarnings,
+  matchBomWarnings,
+  warningOverlapsWindow,
 } from "../providers/bom.js";
 import {
   calculateEot20,
@@ -16,7 +18,12 @@ import {
 } from "../providers/bomOfficialTide.js";
 import { scoreHour, mergeWindows, RULE_VERSION } from "../domain/scoring.js";
 import type { HourlyEnvironment } from "../domain/types.js";
-import { getRainContext, localAstronomy, probeBomWaterData } from "../providers/environmentContext.js";
+import {
+  getRainContext,
+  localAstronomy,
+} from "../providers/environmentContext.js";
+import { getNswMhlWaveObservation } from "../providers/nswMhlWave.js";
+import { getBrooklynHydrology } from "../providers/brooklynHydrology.js";
 
 const baseSpot = {
   id: "selected-location",
@@ -32,7 +39,10 @@ const baseSpot = {
   preferredTideSource: "BOM_OFFICIAL",
 };
 type Input = Partial<typeof baseSpot>;
-const canonicalTideSource=(value:unknown)=>({OFFICIAL:'BOM_OFFICIAL',EOT20:'EOT20_MODEL',NONE:'NO_TIDE'}[String(value).toUpperCase()]??String(value).toUpperCase());
+const canonicalTideSource = (value: unknown) =>
+  ({ OFFICIAL: "BOM_OFFICIAL", EOT20: "EOT20_MODEL", NONE: "NO_TIDE" })[
+    String(value).toUpperCase()
+  ] ?? String(value).toUpperCase();
 const marineApplicability = (spotType: string, waterType: string) =>
   spotType === "freshwater" || /freshwater/i.test(waterType)
     ? "NOT_APPLICABLE"
@@ -55,18 +65,20 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
           .get(spot.id) as Record<string, unknown> | undefined)
       : undefined;
   const officialCandidates = db
-    ? (nearestOfficialStations(db, point) as Array<Record<string, unknown> & { distanceKm: number }>).filter(
-        (station) => station.state === spot.state,
-      )
+    ? (
+        nearestOfficialStations(db, point) as Array<
+          Record<string, unknown> & { distanceKm: number }
+        >
+      ).filter((station) => station.state === spot.state)
     : [];
   const lockedStationId = preference?.station_locked
     ? String(preference.official_station_id ?? "")
     : "";
   const officialStation = lockedStationId
-    ? officialCandidates.find(
+    ? (officialCandidates.find(
         (station) => String(station.station_id) === lockedStationId,
-      ) ?? null
-    : officialCandidates.find((station) => station.distanceKm <= 300) ?? null;
+      ) ?? null)
+    : (officialCandidates.find((station) => station.distanceKm <= 300) ?? null);
   const preferredTideSource = canonicalTideSource(
     input.preferredTideSource ??
       preference?.preferred_tide_source ??
@@ -112,10 +124,22 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
       timezone: spot.timezone,
     }),
     getRainContext(point),
-    probeBomWaterData(),
+    getBrooklynHydrology(point),
+    spot.state === "NSW"
+      ? getNswMhlWaveObservation(point, spot.spotType, spot.waterType)
+      : Promise.resolve(null),
   ] as const;
-  const [weatherR, marineR, warningsR, observationR, marineForecastR, eot20R, rainR, waterDataR] =
-    await Promise.allSettled(tasks);
+  const [
+    weatherR,
+    marineR,
+    warningsR,
+    observationR,
+    marineForecastR,
+    eot20R,
+    rainR,
+    waterDataR,
+    mhlR,
+  ] = await Promise.allSettled(tasks);
   if (weatherR.status === "rejected")
     throw new Error("WEATHER_PROVIDER_UNAVAILABLE", { cause: weatherR.reason });
   const liveWeather: Partial<HourlyEnvironment>[] = weatherR.value;
@@ -127,16 +151,30 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
       observationR.status === "fulfilled" ? observationR.value : null,
     bomMarine =
       marineForecastR.status === "fulfilled" ? marineForecastR.value : null,
-    eot20 = eot20R.status === "fulfilled" ? eot20R.value : null;
+    eot20 = eot20R.status === "fulfilled" ? eot20R.value : null,
+    mhl = mhlR.status === "fulfilled" ? mhlR.value : null;
+  const warningMatch = warnings
+    ? matchBomWarnings(warnings.warnings, point, spot.state)
+    : null;
   const mApplicability = marineApplicability(spot.spotType, spot.waterType);
-  const selectedTide = preferredTideSource === "EOT20_MODEL" && eot20
-    ? "EOT20_MODEL"
-    : preferredTideSource === "BOM_OFFICIAL" && official?.events.length
-      ? "BOM_OFFICIAL"
-      : "NO_TIDE";
-  const tideFallbackReason = selectedTide === preferredTideSource ? null
-    : preferredTideSource === "EOT20_MODEL" ? String(eot20R.status === 'rejected' ? eot20R.reason : 'EOT20_UNAVAILABLE')
-      : preferredTideSource === "BOM_OFFICIAL" ? (lockedStationId ? 'LOCKED_OFFICIAL_STATION_UNAVAILABLE' : 'OFFICIAL_TIDE_UNAVAILABLE') : null;
+  const selectedTide =
+    preferredTideSource === "EOT20_MODEL" && eot20
+      ? "EOT20_MODEL"
+      : preferredTideSource === "BOM_OFFICIAL" && official?.events.length
+        ? "BOM_OFFICIAL"
+        : "NO_TIDE";
+  const tideFallbackReason =
+    selectedTide === preferredTideSource
+      ? null
+      : preferredTideSource === "EOT20_MODEL"
+        ? String(
+            eot20R.status === "rejected" ? eot20R.reason : "EOT20_UNAVAILABLE",
+          )
+        : preferredTideSource === "BOM_OFFICIAL"
+          ? lockedStationId
+            ? "LOCKED_OFFICIAL_STATION_UNAVAILABLE"
+            : "OFFICIAL_TIDE_UNAVAILABLE"
+          : null;
   const marineForecastMaxKnots = bomMarine
     ? Math.max(
         0,
@@ -168,13 +206,18 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
         : selectedTide === "EOT20_MODEL"
           ? modelPoint
           : null;
-    const activeMarineWarning = warnings?.warnings.find(
+    const activeMarineWarning = warningMatch?.matches.find(
       (warning) =>
+        warning.matchStatus === "AFFECTED" &&
         /marine|wind warning|hazardous surf|damaging waves|abnormally high tides/i.test(
           warning.title,
         ) &&
-        new Date(timestampUtc).getTime() <=
-          new Date(warning.issuedAtUtc).getTime() + 24 * 3_600_000,
+        warningOverlapsWindow(warning, timestampUtc, new Date(new Date(timestampUtc).getTime()+60*60_000).toISOString()),
+    );
+    const possiblyAffectedWarning = warningMatch?.matches.find(
+      (warning) =>
+        warning.matchStatus === "POSSIBLY_AFFECTED" &&
+        warningOverlapsWindow(warning, timestampUtc, new Date(new Date(timestampUtc).getTime()+60*60_000).toISOString()),
     );
     const currentHours =
       (new Date(timestampUtc).getTime() - Date.now()) / 3_600_000;
@@ -196,17 +239,25 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
         : (w.windGustKmh ?? null);
     const marineConflict =
       marineForecastMaxKnots * 1.852 > (forecastWind ?? 0) + 15;
+    const mhlCurrent =
+      mhl?.applicability === "APPLICABLE" && currentHours >= -1 && currentHours <= 3
+        ? mhl
+        : null;
     let overall = 0.96;
     if (warningsR.status === "rejected") overall -= 0.28;
     if (observationR.status === "rejected") overall -= 0.08;
     if (mApplicability === "LOW_CONFIDENCE") overall -= 0.12;
     if (marineR.status === "rejected") overall -= 0.1;
     if (selectedTide === "NO_TIDE") overall -= 0.12;
-    if (selectedTide === "EOT20_MODEL" && eot20?.applicability === "LOW_CONFIDENCE")
+    if (
+      selectedTide === "EOT20_MODEL" &&
+      eot20?.applicability === "LOW_CONFIDENCE"
+    )
       overall -= 0.16;
     if (official && official.station.distanceKm > 100) overall -= 0.1;
     if (observedHigher) overall -= 0.12;
     if (marineConflict) overall -= 0.12;
+    if (mhlR.status === "rejected" && spot.state === "NSW") overall -= 0.03;
     const env: HourlyEnvironment = {
       timestampUtc,
       timestampLocal: String(w.timestampLocal),
@@ -235,7 +286,7 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
       waveHeightM:
         mApplicability !== "NOT_APPLICABLE" &&
         mApplicability !== "LOW_CONFIDENCE"
-          ? (m.waveHeightM ?? null)
+          ? Math.max(m.waveHeightM ?? 0, mhlCurrent?.significantWaveHeightM ?? 0) || null
           : null,
       swellHeightM:
         mApplicability === "APPLICABLE" ? (m.swellHeightM ?? null) : null,
@@ -245,17 +296,23 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
       tideHeightM: tide?.heightM ?? null,
       tidePhase: tide?.phase ?? null,
       warningSeverity:
-        activeMarineWarning?.severity ?? (warnings ? "none" : "unknown"),
+        activeMarineWarning?.severity ??
+        (possiblyAffectedWarning ? "moderate" : warnings ? "none" : "unknown"),
       daylightState: w.daylightState ?? "night",
       sources: {
         ...(w.sources ?? {}),
         ...(m.sources ?? {}),
         ...(selectedTide === "BOM_OFFICIAL"
-          ? { tide: `${String(officialStation?.provider ?? "Official")} station prediction` }
+          ? {
+              tide: `${String(officialStation?.provider ?? "Official")} station prediction`,
+            }
           : selectedTide === "EOT20_MODEL"
             ? { tide: "EOT20 global model" }
             : {}),
         ...(observed ? { observation: `BOM ${observed.stationName}` } : {}),
+        ...(mhlCurrent
+          ? { waveObservation: `NSW MHL ${mhlCurrent.stationName} (offshore)` }
+          : {}),
       },
       fetchedAtUtc: new Date().toISOString(),
       dataQuality: {
@@ -288,18 +345,16 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
     if (existing) existing.push(hour);
     else grouped.set(date, [hour]);
   }
-  const days = [...grouped.entries()]
-    .slice(0, 7)
-    .map(([date, slice]) => ({
-      date,
-      hours: slice,
-      windows: mergeWindows(
-        slice.map((hour) => ({
-          timestampUtc: hour.timestampUtc,
-          score: hour.score,
-        })),
-      ).slice(0, 2),
-    }));
+  const days = [...grouped.entries()].slice(0, 7).map(([date, slice]) => ({
+    date,
+    hours: slice,
+    windows: mergeWindows(
+      slice.map((hour) => ({
+        timestampUtc: hour.timestampUtc,
+        score: hour.score,
+      })),
+    ).slice(0, 2),
+  }));
   const officialNextHigh = official?.events.find(
       (event) => event.type === "HIGH" && new Date(event.timeUtc) > start,
     ),
@@ -312,12 +367,30 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
     modelNextLow = eot20?.events.find(
       (event) => event.type === "LOW" && new Date(event.timestampUtc) > start,
     );
+  const initialForecastWind=liveWeather[0]?.windSpeedKmh ?? null;
+  const forecastVsObservation = observation?.selected ? {
+    forecastWindKmh: initialForecastWind,
+    observedWindKmh: observation.selected.windSpeedKmh,
+    observedGustKmh: observation.selected.gustKmh,
+    windDifferenceKmh: initialForecastWind !== null && observation.selected.windSpeedKmh !== null ? Number((observation.selected.windSpeedKmh-initialForecastWind).toFixed(1)) : null,
+    affectsSafety: Boolean(hours[0]?.score.safetyStatus !== 'SAFE'),
+    affectsComfort: Boolean(hours[0]?.score.comfortScore < 70),
+  } : null;
   return {
     spot,
     days,
     astronomy: localAstronomy(point),
-    rainfallContext: rainR.status === "fulfilled" ? rainR.value : { status: "UNAVAILABLE", reason: String(rainR.reason) },
-    waterData: waterDataR.status === "fulfilled" ? waterDataR.value : { status: "BLOCKED_BY_PROVIDER_LIMITATION", detail: String(waterDataR.reason) },
+    rainfallContext:
+      rainR.status === "fulfilled"
+        ? rainR.value
+        : { status: "UNAVAILABLE", reason: String(rainR.reason) },
+    waterData:
+      waterDataR.status === "fulfilled"
+        ? waterDataR.value
+        : {
+            status: "BLOCKED_BY_PROVIDER_LIMITATION",
+            detail: String(waterDataR.reason),
+          },
     tides: {
       selectedSource: selectedTide,
       preferredSource: preferredTideSource,
@@ -329,7 +402,9 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
       officialTimeOffsetMinutes: timeOffset,
       officialHeightOffsetM: heightOffset,
       eot20ModelVersion: eot20?.version ?? eot20Status().version,
-      eot20Applicability: eot20?.applicability ?? eot20Applicability(spot.spotType,spot.waterType),
+      eot20Applicability:
+        eot20?.applicability ??
+        eot20Applicability(spot.spotType, spot.waterType),
       tideRuleVersion: RULE_VERSION,
       official,
       model: eot20 ?? {
@@ -355,20 +430,38 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
               ),
               officialLow: officialNextLow ?? null,
               modelLow: modelNextLow ?? null,
-              lowTimeDifferenceMinutes: officialNextLow && modelNextLow ? Math.round(Math.abs(new Date(officialNextLow.timeUtc).getTime()-new Date(modelNextLow.timestampUtc).getTime())/60_000) : null,
-              officialConfidence: Number(officialStation?.distanceKm)>100?0.7:0.9,
+              lowTimeDifferenceMinutes:
+                officialNextLow && modelNextLow
+                  ? Math.round(
+                      Math.abs(
+                        new Date(officialNextLow.timeUtc).getTime() -
+                          new Date(modelNextLow.timestampUtc).getTime(),
+                      ) / 60_000,
+                    )
+                  : null,
+              officialConfidence:
+                Number(officialStation?.distanceKm) > 100 ? 0.7 : 0.9,
               modelConfidence: eot20?.confidence ?? 0,
               actualTideSourceUsed: selectedTide,
             }
           : null,
     },
-    warnings: warnings ?? {
-      status: "UNAVAILABLE",
-      reason: String(
-        warningsR.status === "rejected" ? warningsR.reason : "NO_DATA",
-      ),
-    },
-    observation: observation ?? {
+    warnings: warnings
+      ? {
+          ...warnings,
+          status: warningMatch?.status ?? "UNKNOWN",
+          warnings: warningMatch?.matches ?? warnings.warnings,
+          matchStatus: warningMatch?.status ?? "UNKNOWN",
+          checkedAtUtc: warnings.fetchedAtUtc,
+        }
+      : {
+          status: "UNAVAILABLE",
+          matchStatus: "UNKNOWN",
+          reason: String(
+            warningsR.status === "rejected" ? warningsR.reason : "NO_DATA",
+          ),
+        },
+    observation: observation ? { ...observation, forecastVsObservation } : {
       status: "UNAVAILABLE",
       reason: String(
         observationR.status === "rejected" ? observationR.reason : "NO_DATA",
@@ -381,6 +474,13 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
           ? marineForecastR.reason
           : "NO_DATA",
       ),
+    },
+    nswMhlWave: mhl ?? {
+      status: spot.state === "NSW" ? "UNAVAILABLE" : "NOT_APPLICABLE",
+      reason:
+        spot.state === "NSW"
+          ? String(mhlR.status === "rejected" ? mhlR.reason : "NO_DATA")
+          : "NSW_PROVIDER_ONLY",
     },
     marineApplicability: {
       status: mApplicability,
@@ -439,8 +539,12 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
         status: bomMarine ? "available" : "unavailable",
         provider: "BOM text forecast",
       },
+      nswMhlWave: {
+        status: mhl ? "available" : spot.state === "NSW" ? "unavailable" : "not_applicable",
+        provider: "NSW MHL offshore wave buoy",
+      },
     },
-    degraded: [marineR, warningsR, observationR, marineForecastR, eot20R].some(
+    degraded: [marineR, warningsR, observationR, marineForecastR, eot20R, mhlR].some(
       (result) => result.status === "rejected",
     ),
     generatedAtUtc: new Date().toISOString(),

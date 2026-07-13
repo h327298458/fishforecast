@@ -70,7 +70,148 @@ export type BomWarning = {
   sourceUrl: string;
   rawPayload: string;
   fetchedAtUtc: string;
+  lifecycle: "ACTIVE" | "FINAL" | "CANCELLED";
+  timeBasis: "RSS_ISSUED" | "RSS_FINAL";
 };
+export type WarningMatch = BomWarning & {
+  matchStatus: "AFFECTED" | "POSSIBLY_AFFECTED" | "NOT_AFFECTED";
+  matchReason: string;
+};
+const regionalAliases: Record<
+  string,
+  Array<{
+    when: (point: { latitude: number; longitude: number }) => boolean;
+    terms: string[];
+  }>
+> = {
+  NSW: [
+    {
+      when: (p) =>
+        p.latitude > -34.25 && p.latitude < -33.35 && p.longitude > 150.8,
+      terms: [
+        "sydney",
+        "sydney harbour",
+        "sydney waters",
+        "botany bay",
+        "pittwater",
+        "hawkesbury",
+        "lower hunter",
+        "central coast",
+      ],
+    },
+    {
+      when: (p) =>
+        p.latitude > -33.7 && p.latitude < -33.35 && p.longitude > 151.0,
+      terms: [
+        "hawkesbury",
+        "broken bay",
+        "pittwater",
+        "central coast",
+        "sydney",
+      ],
+    },
+    {
+      when: (p) =>
+        p.latitude > -34.05 && p.latitude < -33.75 && p.longitude > 151.1,
+      terms: ["sydney", "sydney harbour", "sydney waters", "botany bay"],
+    },
+  ],
+  QLD: [
+    {
+      when: (p) =>
+        p.latitude > -28.4 && p.latitude < -27.2 && p.longitude > 153,
+      terms: [
+        "gold coast",
+        "southeast coast",
+        "south east coast",
+        "cape moreton",
+        "point danger",
+        "moreton bay",
+      ],
+    },
+  ],
+  VIC: [
+    {
+      when: (p) =>
+        p.latitude > -38.2 && p.latitude < -37.6 && p.longitude > 144.5,
+      terms: ["port phillip", "melbourne", "port phillip bay"],
+    },
+  ],
+  WA: [
+    {
+      when: (p) =>
+        p.latitude > -32.3 && p.latitude < -31.5 && p.longitude > 115.5,
+      terms: ["perth", "rottnest", "swan", "metropolitan waters"],
+    },
+  ],
+  TAS: [
+    {
+      when: (p) =>
+        p.latitude > -43.2 && p.latitude < -42.5 && p.longitude > 147,
+      terms: ["hobart", "derwent", "storm bay"],
+    },
+  ],
+  NT: [
+    {
+      when: (p) =>
+        p.latitude > -12.8 && p.latitude < -12.1 && p.longitude > 130.5,
+      terms: ["darwin", "darwin harbour", "beagle gulf"],
+    },
+  ],
+};
+export function matchBomWarnings(
+  warnings: BomWarning[],
+  point: { latitude: number; longitude: number },
+  state: string,
+) {
+  const aliases =
+    regionalAliases[state]
+      ?.filter((entry) => entry.when(point))
+      .flatMap((entry) => entry.terms) ?? [];
+  const matches: WarningMatch[] = warnings.map((warning) => {
+    const text = `${warning.title} ${warning.affectedAreaText}`.toLowerCase();
+    if (warning.lifecycle !== "ACTIVE")
+      return {
+        ...warning,
+        matchStatus: "NOT_AFFECTED",
+        matchReason: "WARNING_FINAL_OR_CANCELLED",
+      } as WarningMatch;
+    const matched = aliases.find((term) => text.includes(term));
+    if (matched)
+      return {
+        ...warning,
+        matchStatus: "AFFECTED",
+        matchReason: `AREA_TEXT:${matched}`,
+      } as WarningMatch;
+    const hasSpecificArea =
+      /\bfor\b|river|district|coast|waters|harbour|bay/i.test(text);
+    return {
+      ...warning,
+      matchStatus: hasSpecificArea ? "NOT_AFFECTED" : "POSSIBLY_AFFECTED",
+      matchReason: hasSpecificArea
+        ? "SPECIFIC_AREA_NOT_MATCHED"
+        : "STATEWIDE_OR_AREA_UNCERTAIN",
+    } as WarningMatch;
+  });
+  const active = matches.filter((item) => item.matchStatus !== "NOT_AFFECTED");
+  const status = active.some((item) => item.matchStatus === "AFFECTED")
+    ? "AFFECTED"
+    : active.some((item) => item.matchStatus === "POSSIBLY_AFFECTED")
+      ? "POSSIBLY_AFFECTED"
+      : "CLEAR";
+  return { status, matches };
+}
+export function warningOverlapsWindow(
+  warning: Pick<BomWarning,"lifecycle"|"issuedAtUtc"|"validFromUtc"|"validUntilUtc"|"fetchedAtUtc">,
+  startUtc: string,
+  endUtc: string,
+) {
+  if (warning.lifecycle !== "ACTIVE") return false;
+  const start = Math.max(new Date(startUtc).getTime(), new Date(warning.validFromUtc ?? warning.issuedAtUtc).getTime());
+  const inferredEnd = new Date(new Date(warning.fetchedAtUtc).getTime() + 6 * 3_600_000).toISOString();
+  const end = Math.min(new Date(endUtc).getTime(), new Date(warning.validUntilUtc ?? inferredEnd).getTime());
+  return start < end;
+}
 export const classifyBomWarning = (title: string) =>
   [
     "Storm Force Wind Warning",
@@ -108,6 +249,9 @@ export async function getBomWarnings(state: string) {
       type = classifyBomWarning(title);
     const productCode = link.match(/(ID[A-Z]\d+)/)?.[1] ?? null;
     const guid = item.guid as Record<string, unknown> | string | undefined;
+    const lifecycle = /\b(final|cancelled|cancellation)\b/i.test(title)
+      ? ("FINAL" as const)
+      : ("ACTIVE" as const);
     return {
       warningId: String(
         typeof guid === "object"
@@ -124,7 +268,10 @@ export async function getBomWarnings(state: string) {
       severity: bomWarningSeverity(type),
       issuedAtUtc: new Date(String(item.pubDate)).toISOString(),
       validFromUtc: null,
-      validUntilUtc: null,
+      validUntilUtc:
+        lifecycle === "FINAL"
+          ? new Date(String(item.pubDate)).toISOString()
+          : null,
       state,
       forecastDistrict: title.match(/for (.+?)(?:\.|$)/i)?.[1] ?? null,
       marineZone: /marine|waters|coast/i.test(title) ? title : null,
@@ -132,6 +279,8 @@ export async function getBomWarnings(state: string) {
       sourceUrl: link.replace("http://", "https://"),
       rawPayload: JSON.stringify(item),
       fetchedAtUtc: fetched.generatedAtUtc,
+      lifecycle,
+      timeBasis: lifecycle === "FINAL" ? "RSS_FINAL" : "RSS_ISSUED",
     };
   });
   return {
@@ -143,7 +292,7 @@ export async function getBomWarnings(state: string) {
   };
 }
 
-type BomObservation = {
+export type BomObservation = {
   stationId: string;
   stationName: string;
   latitude: number;
@@ -159,6 +308,9 @@ type BomObservation = {
   sourceUrl: string;
   fetchedAtUtc: string;
   usingStaleCache: boolean;
+  ageMinutes: number;
+  fieldCompleteness: number;
+  selectionReason?: string;
 };
 const numberOrNull = (value: unknown) =>
   value === undefined || value === null || value === "" ? null : Number(value);
@@ -197,6 +349,8 @@ export async function getBomObservation(
         sourceUrl: url,
         fetchedAtUtc: fetched.generatedAtUtc,
         usingStaleCache: fetched.stale,
+        ageMinutes: Math.max(0,Math.round((Date.now()-new Date(String(period?.["@_time-utc"])).getTime())/60_000)),
+        fieldCompleteness: [element("wind_spd_kmh"),element("gust_kmh"),element("msl_pres") ?? element("pres"),element("rainfall")].filter(value=>value!==undefined&&value!==null&&value!=="").length,
       };
     })
     .filter(
@@ -208,10 +362,11 @@ export async function getBomObservation(
       (a: BomObservation, b: BomObservation) =>
         observationRank(a, point) - observationRank(b, point),
     )
-    .slice(0, 5);
+    .slice(0, 5)
+    .map((item: BomObservation,index:number)=>({...item,selectionReason:index===0?`ranked by distance, freshness and ${item.fieldCompleteness}/4 safety fields`:'candidate retained for administrator review'}));
   return { selected: candidates[0] ?? null, candidates };
 }
-function observationRank(
+export function observationRank(
   item: BomObservation,
   point: { latitude: number; longitude: number },
 ) {
@@ -237,12 +392,58 @@ const marineProducts: Record<string, string> = {
   TAS: "IDT12329",
   NT: "IDD11030",
 };
+type BomMarineDay = {
+  label: string;
+  winds: string | null;
+  seas: string | null;
+  swell: string | null;
+  weather: string | null;
+};
+const htmlToText = (value: string) =>
+  value
+    .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<!--([\s\S]*?)-->/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+function parseBomMarineHtml(html: string) {
+  const weatherSituation = htmlToText(
+    html.match(/<div class="synopsis">([\s\S]*?)<\/div>/i)?.[1] ?? "",
+  );
+  const issuedAtText = htmlToText(
+    html.match(/<p class="date">([\s\S]*?)<\/p>/i)?.[1] ?? "",
+  );
+  const noWarningsText = htmlToText(
+    html.match(/<p class="no-warnings">([\s\S]*?)<\/p>/i)?.[1] ?? "",
+  );
+  const days = [...html.matchAll(/<div class="day">([\s\S]*?)<\/dl>\s*<\/div>/gi)].map(
+    (match): BomMarineDay => {
+      const block = match[1];
+      const field = (name: string) =>
+        htmlToText(
+          block.match(
+            new RegExp(`<dt>\\s*${name}\\s*<\\/dt>\\s*<dd[^>]*>([\\s\\S]*?)<\\/dd>`, "i"),
+          )?.[1] ?? "",
+        ) || null;
+      return {
+        label: htmlToText(block.match(/<h2>([\s\S]*?)<\/h2>/i)?.[1] ?? ""),
+        winds: field("Winds"),
+        seas: field("Seas"),
+        swell: field("Swell"),
+        weather: field("Weather"),
+      };
+    },
+  );
+  return { weatherSituation, issuedAtText, noWarningsText, days };
+}
 export async function getBomMarineForecast(
   point: { latitude: number; longitude: number },
   state: string,
 ) {
   let productCode = marineProducts[state];
   let zone = `${state} Coastal Waters`;
+  let fallbackPageUrl: string | null = null;
   if (
     state === "NSW" &&
     point.latitude > -34.25 &&
@@ -263,18 +464,44 @@ export async function getBomMarineForecast(
   ) {
     productCode = "IDQ11311";
     zone = "Gold Coast Waters: Cape Moreton to Point Danger";
+    fallbackPageUrl = "https://www.bom.gov.au/qld/forecasts/gold-coast-waters.shtml";
   }
   if (!productCode) throw new Error("BOM_MARINE_STATE_UNSUPPORTED");
-  const sourceUrl = `https://www.bom.gov.au/fwo/${productCode}.txt`,
-    fetched = await bomText(sourceUrl, 45 * 60_000, "marineForecast");
+  const sourceUrl = `https://www.bom.gov.au/fwo/${productCode}.txt`;
+  let fetched: Awaited<ReturnType<typeof bomText>>;
+  let actualSourceUrl = sourceUrl;
+  try { fetched = await bomText(sourceUrl, 45 * 60_000, "marineForecast"); }
+  catch (error) {
+    if (!fallbackPageUrl || !(error instanceof Error) || !error.message.includes('BOM_HTTP_404')) throw error;
+    fetched = await bomText(fallbackPageUrl,45*60_000,'marineForecast');
+    actualSourceUrl = fallbackPageUrl;
+  }
+  const structured = actualSourceUrl.endsWith(".shtml")
+    ? parseBomMarineHtml(fetched.text)
+    : { weatherSituation: "", issuedAtText: "", noWarningsText: "", days: [] };
+  const text = actualSourceUrl.endsWith(".shtml")
+    ? structured.days
+        .map((day) =>
+          [day.label, day.winds, day.seas, day.swell, day.weather]
+            .filter(Boolean)
+            .join(" — "),
+        )
+        .join("\n")
+    : fetched.text.trim();
+  const windKnots=[...text.matchAll(/(?:below\s+)?(\d+)(?:\s+to\s+(\d+))?\s+knots/gi)].map(match=>({minKnots:Number(match[1]),maxKnots:Number(match[2]??match[1]),minKmh:Number((Number(match[1])*1.852).toFixed(1)),maxKmh:Number((Number(match[2]??match[1])*1.852).toFixed(1))}));
   return {
     provider: "BOM",
     productCode,
     zone,
-    text: fetched.text.trim(),
-    sourceUrl,
+    text,
+    sourceUrl: actualSourceUrl,
     fetchedAtUtc: fetched.generatedAtUtc,
     usingStaleCache: fetched.stale,
     precision: "OFFICIAL_ZONE_TEXT_NOT_HOURLY" as const,
+    windRanges: windKnots,
+    weatherSituation: structured.weatherSituation || null,
+    issuedAtText: structured.issuedAtText || null,
+    noWarningsText: structured.noWarningsText || null,
+    days: structured.days,
   };
 }

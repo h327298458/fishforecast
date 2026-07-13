@@ -109,11 +109,19 @@ export type Forecast = {
       severity: string;
       sourceUrl: string;
       issuedAtUtc: string;
+      validFromUtc?:string|null;
+      validUntilUtc?:string|null;
+      affectedAreaText?:string;
+      matchStatus?:'AFFECTED'|'POSSIBLY_AFFECTED'|'NOT_AFFECTED';
+      matchReason?:string;
+      lifecycle?:'ACTIVE'|'FINAL'|'CANCELLED';
     }>;
     sourceUrl?: string;
     usingStaleCache?: boolean;
     status?: string;
     reason?: string;
+    matchStatus?:string;
+    checkedAtUtc?:string;
   };
   observation: {
     selected?: {
@@ -125,9 +133,14 @@ export type Forecast = {
       temperatureC: number | null;
       pressureHpa: number | null;
       rainSince9amMm: number | null;
+      ageMinutes?:number;
+      fieldCompleteness?:number;
+      selectionReason?:string;
     };
     status?: string;
     reason?: string;
+    candidates?:Array<Forecast['observation']['selected']>;
+    forecastVsObservation?:{forecastWindKmh:number|null;observedWindKmh:number|null;observedGustKmh:number|null;windDifferenceKmh:number|null;affectsSafety:boolean;affectsComfort:boolean}|null;
   };
   bomMarineForecast: {
     productCode?: string;
@@ -137,6 +150,46 @@ export type Forecast = {
     usingStaleCache?: boolean;
     status?: string;
     reason?: string;
+  };
+  nswMhlWave: {
+    provider?: string;
+    stationName?: string;
+    stationCode?: string;
+    stationLatitude?: number;
+    stationLongitude?: number;
+    distanceToSpotKm?: number;
+    observationTimeUtc?: string;
+    significantWaveHeightM?: number | null;
+    maximumWaveHeightM?: number | null;
+    wavePeriodSeconds?: number | null;
+    waveDirectionDeg?: number | null;
+    seaTemperatureC?: number | null;
+    applicability?: string;
+    applicabilityReason?: string;
+    sourceUrl?: string;
+    fetchedAtUtc?: string;
+    usingStaleCache?: boolean;
+    status?: string;
+    reason?: string;
+  };
+  waterData: {
+    status: string;
+    provider?: string;
+    stationName?: string;
+    stationCode?: string;
+    distanceToSpotKm?: number;
+    observedAtUtc?: string;
+    waterLevelM?: number;
+    datum?: string | null;
+    change24hM?: number | null;
+    change72hM?: number | null;
+    trend?: string;
+    flowM3s?: number | null;
+    upstreamRain?: { source: string; referenceArea: string; past24hMm: number; past72hMm: number; future24hMm: number };
+    sourceUrl?: string;
+    usingStaleCache?: boolean;
+    limitation?: string;
+    detail?: string;
   };
   marineApplicability: {
     status: string;
@@ -157,4 +210,8 @@ export type FishingLog = {
   catches: number;
   rating: number;
   notes: string | null;
+  forecastSnapshotId?: string | null;
+  gearIssues?: string | null;
+  detailsJson?: string;
+  comparisonJson?: string | null;
 };

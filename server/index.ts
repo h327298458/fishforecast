@@ -108,8 +108,10 @@ app.get("/api/forecast", async (req, reply) => {
       warnings: forecast.warnings,
       observation: forecast.observation,
       bomMarineForecast: forecast.bomMarineForecast,
+      nswMhlWave: forecast.nswMhlWave,
       marineApplicability: forecast.marineApplicability,
       rainfallContext: forecast.rainfallContext,
+      waterData: forecast.waterData,
       providerStatus: forecast.providerStatus,
       days: forecast.days.map((day) => ({ date: day.date, windows: day.windows, scores: day.hours.map((hour) => ({ timestampUtc: hour.timestampUtc, score: hour.score, tideHeightM: hour.tideHeightM, tidePhase: hour.tidePhase })) })),
     };
@@ -213,12 +215,12 @@ app.put("/api/spots/:id/environment-preferences", async (req, reply) => {
 app.get("/api/logs", async () =>
   db
     .prepare(
-      "SELECT id,spot_id AS spotId,started_at_utc AS startedAtUtc,ended_at_utc AS endedAtUtc,method,bait,bites,catches,kept,rating,gear_issues AS gearIssues,notes,created_at_utc AS createdAtUtc FROM fishing_logs ORDER BY started_at_utc DESC LIMIT 100",
+      "SELECT id,spot_id AS spotId,forecast_snapshot_id AS forecastSnapshotId,started_at_utc AS startedAtUtc,ended_at_utc AS endedAtUtc,method,bait,bites,catches,kept,rating,gear_issues AS gearIssues,notes,details_json AS detailsJson,comparison_json AS comparisonJson,created_at_utc AS createdAtUtc FROM fishing_logs ORDER BY started_at_utc DESC LIMIT 100",
     )
     .all(),
 );
 app.post("/api/logs", async (req, reply) => {
-  const b = req.body as Record<string, string | number | null | undefined>;
+  const b = req.body as Record<string, unknown>;
   const spotId = String(b.spotId ?? "");
   if (!spotId || !db.prepare("SELECT 1 FROM spots WHERE id=?").get(spotId))
     return reply
@@ -230,23 +232,21 @@ app.post("/api/logs", async (req, reply) => {
       });
   const id = randomUUID(),
     now = new Date().toISOString();
+  const detailKeys = ["effectiveMinutes","blank","species","maxLengthCm","maxWeightKg","lure","waterDepth","castingDistanceM","moveCount","snagCount","tangleCount","lineBreakCount","baitLossCount","boatTraffic","crowdTraffic","weatherInterrupted"];
+  const details = Object.fromEntries(detailKeys.filter((key) => b[key] !== undefined).map((key) => [key, b[key]]));
+  const gearProblem = Boolean(Number(b.snagCount ?? 0) || Number(b.tangleCount ?? 0) || Number(b.lineBreakCount ?? 0) || Number(b.baitLossCount ?? 0));
+  const snapshot = b.forecastSnapshotId ? db.prepare("SELECT payload_json FROM forecast_snapshots WHERE id=?").get(String(b.forecastSnapshotId)) as { payload_json?: string } | undefined : undefined;
+  const comparison = { snapshotAvailable: Boolean(snapshot), actualBites: Number(b.bites ?? 0), actualCatches: Number(b.catches ?? 0), blank: Boolean(b.blank), trainingEligible: !gearProblem, reason: gearProblem ? "EQUIPMENT_ISSUES_PRESENT" : "ENVIRONMENT_RESULT_ELIGIBLE", tideSource: snapshot ? JSON.parse(String(snapshot.payload_json ?? "{}")).tides?.actualTideSourceUsed ?? null : null };
   db.prepare(
-    "INSERT INTO fishing_logs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    "INSERT INTO fishing_logs (id,spot_id,forecast_snapshot_id,started_at_utc,ended_at_utc,method,bait,bites,catches,kept,rating,gear_issues,notes,created_at_utc,details_json,comparison_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
   ).run(
     id,
     spotId,
     b.forecastSnapshotId ?? null,
-    b.startedAtUtc,
-    b.endedAtUtc,
-    b.method ?? "bottom_fishing",
-    b.bait ?? null,
-    b.bites ?? 0,
-    b.catches ?? 0,
-    b.kept ?? 0,
-    b.rating ?? 3,
-    b.gearIssues ?? null,
-    b.notes ?? null,
+    String(b.startedAtUtc), String(b.endedAtUtc), String(b.method ?? "bottom_fishing"), b.bait ?? null, Number(b.bites ?? 0), Number(b.catches ?? 0), Number(b.kept ?? 0), Number(b.rating ?? 3), b.gearIssues ?? null, b.notes ?? null,
     now,
+    JSON.stringify(details),
+    JSON.stringify(comparison),
   );
   return reply.code(201).send({ id });
 });

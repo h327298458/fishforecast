@@ -1,5 +1,13 @@
 # 数据来源登记
 
+## 2026-07-13 verification update
+
+| Provider | Function | Official documentation / format | Auth / cost / limits | Licence / cache | Coverage and known limitations | Status |
+|---|---|---|---|---|---|---|
+| BomMarineForecastProvider | Government marine-zone second opinion | [BOM Gold Coast Waters](https://www.bom.gov.au/qld/forecasts/gold-coast-waters.shtml), official HTML; legacy BOM text products where available | Anonymous, free; 45-minute in-process cache | BOM attribution and source link retained | Sydney BOM text products and Gold Coast official HTML page verified. It is zone text, not an hourly point forecast; national zone mapping remains incomplete. | PARTIAL |
+| NswMhlWaveProvider | NSW MHL offshore buoy observation | [Data.NSW ocean-wave dataset](https://data.nsw.gov.au/data/en/dataset/nsw-ocean-wave-data-collection-program), JSON from MHL public endpoint | Public `publicwww` access, no paid key; 10-minute cache | Data.NSW states CC BY; station/source URL and observation time retained | Seven offshore NSW buoys. Sydney buoy verified for Bondi, Walsh Bay and Brooklyn. It is a deep-water regional reference, never shore wave height; harbour/estuary use is LOW_CONFIDENCE. | PARTIAL |
+| WaterDataProvider | Brooklyn / lower Hawkesbury water-level context | [WaterNSW real-time water metadata](https://data.nsw.gov.au/data/en/dataset/surface-water-monitoring-streams), public MHL JSON `latest-readings` and `rawdatatable` | WaterNSW documented API requires registration/subscription; this public MHL route is anonymous and free | NSW source URL, observation time and 15-minute cache retained | Spencer level gauge is 12.5 km from Brooklyn and is tidally influenced. Level trends are real; it has no public discharge series through this route. North Richmond upstream rainfall is explicitly Open-Meteo model/analysis. | PARTIAL |
+
 最后核验日期：2026-07-11。状态是当前代码与本机数据的真实状态，不因“存在接口文件”而升级。
 
 | 服务名称 / Provider | 功能 | 官方文档与格式 | 认证 / 费用 / 调用限制 | 许可与缓存 | 适用区域 / 已知局限 / 降级 | 状态 |

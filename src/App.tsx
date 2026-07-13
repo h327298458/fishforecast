@@ -527,6 +527,7 @@ function LogsView({ logs }: { logs: FishingLog[] }) {
               {log.rating}/4
             </span>
             {log.notes ? <p>{log.notes}</p> : null}
+            {log.comparisonJson ? <LogComparison value={log.comparisonJson} /> : null}
           </article>
         ))
       ) : (
@@ -534,6 +535,12 @@ function LogsView({ logs }: { logs: FishingLog[] }) {
       )}
     </div>
   );
+}
+function LogComparison({ value }: { value: string }) {
+  try {
+    const comparison = JSON.parse(value) as { snapshotAvailable?: boolean; trainingEligible?: boolean; reason?: string; tideSource?: string };
+    return <small>预测快照 {comparison.snapshotAvailable ? "已关联" : "缺失"} · 潮汐源 {comparison.tideSource ?? "—"} · {comparison.trainingEligible ? "可作为环境样本" : `不作为纯环境样本：${comparison.reason ?? "未说明"}`}</small>;
+  } catch { return <small>历史比较数据格式无效</small>; }
 }
 function AnalyticsView({
   data,

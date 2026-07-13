@@ -21,6 +21,7 @@
     "tides:nsw:import": "tsx scripts/import-bom-nsw-tides.ts",
     "test:nsw-tides": "vitest run --config vitest.nsw-tides.config.ts"
     ,"tides:compare:validate": "tsx scripts/validate-double-tides.ts"
+    ,"observations:bom:validate": "tsx scripts/validate-bom-observations.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",
