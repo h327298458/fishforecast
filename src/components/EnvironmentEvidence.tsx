@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { Forecast, TideSource } from "../types";
 import { getEot20Tide, type Eot20Model } from "../api";
 const time = (value: string | undefined, timezone: string) =>
@@ -26,12 +26,12 @@ export function EnvironmentEvidence({
   onOfficialSettings: (options: Record<string, unknown>) => void;
 }) {
   const [mode, setMode] = useState<Mode>("official");
-  const [onDemandModel, setOnDemandModel] = useState<Eot20Model | null>(null);
+  const [onDemandModel, setOnDemandModel] = useState<{ spotId: string; model: Eot20Model } | null>(null);
   const [modelLoading, setModelLoading] = useState(false);
-  const [modelError, setModelError] = useState("");
-  useEffect(() => { setOnDemandModel(null); setModelError(""); }, [forecast.spot.id, spotType]);
+  const [modelError, setModelError] = useState<{ spotId: string; message: string } | null>(null);
   const { official, model: initialModel, comparison: storedComparison } = forecast.tides;
-  const model = onDemandModel ?? initialModel;
+  const model = onDemandModel?.spotId === forecast.spot.id ? onDemandModel.model : initialModel;
+  const visibleModelError = modelError?.spotId === forecast.spot.id ? modelError.message : "";
   const modelAvailable = Boolean(model.events);
   const modelSelectable = modelAvailable || initialModel.status === "REAL";
   const officialAvailable = Boolean(official?.events.length);
@@ -47,9 +47,9 @@ export function EnvironmentEvidence({
   async function selectMode(next: Mode) {
     setMode(next);
     if (next === "official" || modelAvailable || !modelSelectable || modelLoading) return;
-    setModelLoading(true); setModelError("");
-    try { setOnDemandModel(await getEot20Tide(forecast.spot, spotType)); }
-    catch (error) { setModelError(error instanceof Error ? error.message : "EOT20_UNAVAILABLE"); }
+    setModelLoading(true); setModelError(null);
+    try { setOnDemandModel({ spotId: forecast.spot.id, model: await getEot20Tide(forecast.spot, spotType) }); }
+    catch (error) { setModelError({ spotId: forecast.spot.id, message: error instanceof Error ? error.message : "EOT20_UNAVAILABLE" }); }
     finally { setModelLoading(false); }
   }
   return (
@@ -146,7 +146,7 @@ export function EnvironmentEvidence({
             </div>
           ) : (
             <p className="unavailable">
-              EOT20：{modelLoading ? "正在按需计算模型…" : modelError || String((model as Record<string, unknown>).reason ?? (model as Record<string, unknown>).status ?? "UNAVAILABLE")}
+              EOT20：{modelLoading ? "正在按需计算模型…" : visibleModelError || String((model as Record<string, unknown>).reason ?? (model as Record<string, unknown>).status ?? "UNAVAILABLE")}
               。缺少或损坏模型时不会生成假潮汐。
             </p>
           )

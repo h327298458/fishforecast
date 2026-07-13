@@ -27,7 +27,7 @@ export function scoreHour(env: HourlyEnvironment, spotType = 'wharf'): ScoreResu
   const fishingConditionScore = weightedScore([{ value: inverseLinear(env.windSpeedKmh, 8, 40), weight: .25 }, { value: env.pressureHpa === null ? null : clamp(75 - Math.abs(env.pressureHpa - 1016) * 2), weight: .2 }, { value: env.tidePhase === null ? null : env.tidePhase === 'rising' ? 86 : env.tidePhase === 'falling' ? 72 : 55, weight: .35 }, { value: env.daylightState === 'day' ? 72 : 60, weight: .2 }]);
   const positives = [env.tidePhase === 'rising' ? '潮位处于上升阶段' : '', (env.windSpeedKmh ?? 99) < 20 ? '平均风速较温和' : '', (env.pressureHpa ?? 0) >= 1012 ? '气压处于稳定区间' : ''].filter(Boolean);
   const negatives = [(env.windGustKmh ?? 0) > 30 ? '阵风可能影响抛投与舒适度' : '', env.warningSeverity === 'unknown' ? '官方警告状态暂时无法核实' : '', missing.length ? `缺少 ${missing.join('、')} 数据` : ''].filter(Boolean);
-  return { safetyStatus, safetyScore: clamp(safetyScore), comfortScore: clamp(comfortScore), fishingConditionScore: clamp(fishingConditionScore), dataConfidenceScore: clamp(env.dataQuality.overall * 100), positives, negatives, missing, ruleVersion: RULE_VERSION };
+  return { safetyStatus, safetyScore: clamp(safetyScore), comfortScore: clamp(comfortScore), fishingConditionScore: clamp(fishingConditionScore), dataConfidenceScore: clamp(env.dataQuality.overall * 100), confidenceReasons: env.dataQuality.reasons ?? [], positives, negatives, missing, ruleVersion: RULE_VERSION };
 }
 
 export function mergeWindows(hours: Array<{ timestampUtc: string; score: ScoreResult }>, minScore = 72) {

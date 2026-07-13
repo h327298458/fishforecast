@@ -23,13 +23,17 @@ const localTime = (utc: string, timezone: string) =>
   }).format(new Date(utc));
 export function TideChart({
   hours,
-  window,
+  window: legacyWindow,
+  windows,
   timezone,
 }: {
   hours: Hour[];
   window?: Window;
+  windows?: Window[];
   timezone: string;
 }) {
+  const window = windows?.[0] ?? legacyWindow;
+  const additionalWindows = (windows ?? []).slice(1);
   const values = hours.map((h) => h.tideHeightM);
   const line = makePath(values);
   const start = window ? new Date(window.startUtc).getTime() : 0,
@@ -73,6 +77,13 @@ export function TideChart({
                 </text>
               </>
             ) : null}
+            {additionalWindows.map((additionalWindow, index) => {
+              const additionalStart = new Date(additionalWindow.startUtc).getTime();
+              const additionalEnd = new Date(additionalWindow.endUtc).getTime();
+              const additionalX = Math.max(0, ((additionalStart - first) / Math.max(last - first, 1)) * 720);
+              const additionalWidth = Math.max(0, ((additionalEnd - additionalStart) / Math.max(last - first, 1)) * 720);
+              return <rect key={additionalWindow.startUtc} className="window" x={additionalX} y={8 + (index % 2) * 3} width={Math.max(additionalWidth, 25)} height="150" />;
+            })}
           </svg>
           <div className="axis">
             <span>00:00</span>

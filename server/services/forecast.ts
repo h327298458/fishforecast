@@ -197,6 +197,10 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
         ),
       )
     : 0;
+  const eot20FailureReason =
+    eot20R.status === "rejected"
+      ? String(eot20R.reason instanceof Error ? eot20R.reason.message : eot20R.reason)
+      : null;
   const hours: Array<
     HourlyEnvironment & { score: ReturnType<typeof scoreHour> }
   > = liveWeather.slice(0, 168).map((w, i) => {
@@ -205,15 +209,9 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
     const officialPoint = official
         ? interpolateOfficial(official.events as TideEvent[], timestampUtc)
         : null,
-      modelPoint =
-        eot20?.values.find(
-          (value) =>
-            Math.abs(
-              new Date(value.timestampUtc).getTime() -
-                new Date(timestampUtc).getTime(),
-            ) <
-            31 * 60_000,
-        ) ?? null;
+      modelPoint = eot20
+        ? interpolateEot20(eot20.values, timestampUtc)
+        : null;
     const tide =
       selectedTide === "BOM_OFFICIAL"
         ? officialPoint
@@ -251,8 +249,13 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
       observed && observed.gustKmh !== null
         ? Math.max(w.windGustKmh ?? 0, observed.gustKmh)
         : (w.windGustKmh ?? null);
+    // BOM's zone forecast is textual and not hourly.  It is an additional
+    // safety opinion for the near term only; applying it to every hour of a
+    // seven-day numerical forecast made confidence incorrectly flat.
     const marineConflict =
-      marineForecastMaxKnots * 1.852 > (forecastWind ?? 0) + 15;
+      currentHours <= 24 &&
+      forecastWind !== null &&
+      marineForecastMaxKnots * 1.852 > forecastWind + 15;
     const mhlCurrent =
       mhl?.applicability === "APPLICABLE" && currentHours >= -1 && currentHours <= 3
         ? mhl
@@ -269,21 +272,61 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
           : marineR.status === "rejected" || waveHeightM === null
             ? "UNAVAILABLE"
             : "AVAILABLE";
-    let overall = 0.96;
-    if (warningsR.status === "rejected") overall -= 0.28;
-    if (observationR.status === "rejected") overall -= 0.08;
-    if (mApplicability === "LOW_CONFIDENCE") overall -= 0.12;
-    if (marineR.status === "rejected") overall -= 0.1;
-    if (selectedTide === "NO_TIDE") overall -= 0.12;
+    const confidenceReasons: string[] = [];
+    let overall = 0.94;
+    const leadHours = Math.max(0, currentHours);
+    const leadPenalty = Math.min(0.2, (leadHours / (7 * 24)) * 0.2);
+    overall -= leadPenalty;
+    confidenceReasons.push(
+      leadHours < 1
+        ? "预报接近当前时间"
+        : `预报距当前约 ${Math.round(leadHours)} 小时`,
+    );
+    if (warningsR.status === "rejected") {
+      overall -= 0.28;
+      confidenceReasons.push("BOM 官方警告本次无法获取，安全状态按未知处理");
+    } else confidenceReasons.push("BOM 官方警告已完成本次检查");
+    if (observationR.status === "rejected" && currentHours <= 3) {
+      overall -= 0.08;
+      confidenceReasons.push("近期 BOM 实况无法获取");
+    } else if (observed) confidenceReasons.push("近期窗口已参考 BOM 实况");
+    if (mApplicability === "LOW_CONFIDENCE") {
+      overall -= 0.12;
+      confidenceReasons.push("该钓点为港湾、河口或内河，外海 Marine 网格仅低可信度参考");
+    }
+    if (marineR.status === "rejected") {
+      overall -= 0.1;
+      confidenceReasons.push("Marine 波浪数据本次无法获取");
+    }
+    if (selectedTide === "NO_TIDE") {
+      overall -= 0.16;
+      confidenceReasons.push("本时段没有可用的正式潮汐评分数据");
+    } else if (selectedTide === "BOM_OFFICIAL") {
+      confidenceReasons.push("使用官方参考港潮汐；并非钓点现场逐分钟潮位");
+    } else confidenceReasons.push("使用 EOT20 经纬度模型潮汐");
     if (
       selectedTide === "EOT20_MODEL" &&
       eot20?.applicability === "LOW_CONFIDENCE"
-    )
+    ) {
       overall -= 0.16;
-    if (official && official.station.distanceKm > 100) overall -= 0.1;
-    if (observedHigher) overall -= 0.12;
-    if (marineConflict) overall -= 0.12;
-    if (mhlR.status === "rejected" && spot.state === "NSW") overall -= 0.03;
+      confidenceReasons.push("EOT20 在此类水域仅低可信度参考");
+    }
+    if (official && official.station.distanceKm > 100) {
+      overall -= 0.1;
+      confidenceReasons.push(`官方参考港距离 ${Number(official.station.distanceKm).toFixed(0)} km，代表性降低`);
+    }
+    if (observedHigher) {
+      overall -= 0.12;
+      confidenceReasons.push("BOM 实测风速明显高于数值预报");
+    }
+    if (marineConflict) {
+      overall -= 0.04;
+      confidenceReasons.push("BOM 海域文字预报风力较数值预报更强，按保守原则处理");
+    }
+    if (mhlR.status === "rejected" && spot.state === "NSW" && currentHours <= 3) {
+      overall -= 0.03;
+      confidenceReasons.push("NSW MHL 浮标实况本次无法获取");
+    }
     const env: HourlyEnvironment = {
       timestampUtc,
       timestampLocal: String(w.timestampLocal),
@@ -357,6 +400,7 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
         warnings: warnings ? 1 : 0,
         observations: observation?.selected ? 0.8 : 0,
         overall: Math.max(0.1, overall),
+        reasons: confidenceReasons,
       },
     };
     return { ...env, score: scoreHour(env, spot.spotType) };
@@ -432,8 +476,13 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
       official,
       model: eot20 ?? {
         ...eot20Status(),
+        status:
+          preferredTideSource === "EOT20_MODEL" ? "UNAVAILABLE" : "NOT_REQUESTED",
         calculated: false,
-        reason: "ON_DEMAND_MODEL_NOT_REQUESTED",
+        reason:
+          preferredTideSource === "EOT20_MODEL"
+            ? (eot20FailureReason ?? "EOT20_UNAVAILABLE")
+            : "ON_DEMAND_MODEL_NOT_REQUESTED",
         applicability: eot20Applicability(spot.spotType, spot.waterType),
       },
       comparison:
@@ -542,14 +591,26 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
         provider: "Open-Meteo Marine",
       },
       officialTide: {
-        status: official?.events.length ? "available" : "unavailable",
+        status: official?.events.length
+          ? "available"
+          : official
+            ? "no_data"
+            : "unavailable",
         provider: "BOM/MSQ official station",
         reason: official ? "NO_EVENTS" : "NO_NEARBY_IMPORTED_STATION",
       },
       eot20: {
-        status: eot20 ? "available" : "unavailable",
+        status: eot20
+          ? "available"
+          : preferredTideSource === "EOT20_MODEL"
+            ? "unavailable"
+            : "not_requested",
         provider: "EOT20",
-        reason: eot20 ? null : eot20Status().reason,
+        reason: eot20
+          ? null
+          : preferredTideSource === "EOT20_MODEL"
+            ? (eot20FailureReason ?? eot20Status().reason ?? "EOT20_UNAVAILABLE")
+            : "ON_DEMAND_MODEL_NOT_REQUESTED",
       },
       warnings: {
         status: warnings ? "available" : "unavailable",
@@ -589,6 +650,39 @@ function interpolateOfficial(events: TideEvent[], timestampUtc: string) {
     heightM = previous.heightM + (next.heightM - previous.heightM) * ratio;
   return {
     heightM: Number(heightM.toFixed(3)),
+    phase:
+      Math.abs(next.heightM - previous.heightM) < 0.01
+        ? ("slack" as const)
+        : next.heightM > previous.heightM
+          ? ("rising" as const)
+          : ("falling" as const),
+  };
+}
+
+function interpolateEot20(
+  values: Array<{
+    timestampUtc: string;
+    heightM: number;
+    phase: "rising" | "falling" | "slack";
+  }>,
+  timestampUtc: string,
+) {
+  const time = new Date(timestampUtc).getTime();
+  const nextIndex = values.findIndex(
+    (value) => new Date(value.timestampUtc).getTime() >= time,
+  );
+  if (nextIndex === -1) return null;
+  const next = values[nextIndex];
+  if (new Date(next.timestampUtc).getTime() === time || nextIndex === 0) {
+    return { heightM: next.heightM, phase: next.phase };
+  }
+  const previous = values[nextIndex - 1];
+  const start = new Date(previous.timestampUtc).getTime();
+  const finish = new Date(next.timestampUtc).getTime();
+  if (finish <= start || time < start) return null;
+  const ratio = (time - start) / (finish - start);
+  return {
+    heightM: Number((previous.heightM + (next.heightM - previous.heightM) * ratio).toFixed(3)),
     phase:
       Math.abs(next.heightM - previous.heightM) < 0.01
         ? ("slack" as const)

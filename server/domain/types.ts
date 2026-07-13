@@ -12,6 +12,11 @@ export type HourlyEnvironment = {
   tideHeightM: number | null; tidePhase: 'rising'|'falling'|'slack'|null;
   warningSeverity: 'none'|'minor'|'moderate'|'severe'|'unknown'; daylightState: 'day'|'night';
   sources: Record<string,string>; fetchedAtUtc: string;
-  dataQuality: { weather: number; marine: number; tide: number; warnings: number; observations?: number; overall: number };
+  dataQuality: {
+    weather: number; marine: number; tide: number; warnings: number;
+    observations?: number; overall: number;
+    /** Human-readable inputs behind the confidence score; never a hidden constant. */
+    reasons?: string[];
+  };
 };
-export type ScoreResult = { safetyStatus: SafetyStatus; safetyScore: number; comfortScore: number; fishingConditionScore: number; dataConfidenceScore: number; positives: string[]; negatives: string[]; missing: string[]; ruleVersion: string };
+export type ScoreResult = { safetyStatus: SafetyStatus; safetyScore: number; comfortScore: number; fishingConditionScore: number; dataConfidenceScore: number; confidenceReasons: string[]; positives: string[]; negatives: string[]; missing: string[]; ruleVersion: string };

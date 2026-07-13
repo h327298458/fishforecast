@@ -410,6 +410,11 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
                 </span>
               </div>
               <MetricRow score={best.score} />
+              {best.score.confidenceReasons.length ? (
+                <p className="confidence-reasons">
+                  <b>数据可信度依据：</b>{best.score.confidenceReasons.join("；")}
+                </p>
+              ) : null}
               <RecommendedWindows windows={current.windows} timezone={point.timezone} />
               <ProviderStrip status={forecast.providerStatus} />
               <div className="day-tabs" role="tablist">
@@ -434,7 +439,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
               </div>
               <TideChart
                 hours={current.hours}
-                window={current.windows[0]}
+                windows={current.windows}
                 timezone={point.timezone}
               />
               <WindChart hours={current.hours} />
@@ -561,10 +566,13 @@ function LogsView({ logs }: { logs: FishingLog[] }) {
   );
 }
 function LogComparison({ value }: { value: string }) {
+  type Comparison = { snapshotAvailable?: boolean; trainingEligible?: boolean; reason?: string; tideSource?: string };
+  let comparison: Comparison | null = null;
   try {
-    const comparison = JSON.parse(value) as { snapshotAvailable?: boolean; trainingEligible?: boolean; reason?: string; tideSource?: string };
-    return <small>预测快照 {comparison.snapshotAvailable ? "已关联" : "缺失"} · 潮汐源 {comparison.tideSource ?? "—"} · {comparison.trainingEligible ? "可作为环境样本" : `不作为纯环境样本：${comparison.reason ?? "未说明"}`}</small>;
-  } catch { return <small>历史比较数据格式无效</small>; }
+    comparison = JSON.parse(value) as Comparison;
+  } catch { /* Invalid legacy comparison data is rendered below. */ }
+  if (!comparison) return <small>历史比较数据格式无效</small>;
+  return <small>预测快照 {comparison.snapshotAvailable ? "已关联" : "缺失"} · 潮汐源 {comparison.tideSource ?? "—"} · {comparison.trainingEligible ? "可作为环境样本" : `不作为纯环境样本：${comparison.reason ?? "未说明"}`}</small>;
 }
 function AnalyticsView({
   data,

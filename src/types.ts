@@ -24,6 +24,7 @@ export type Score = {
   comfortScore: number;
   fishingConditionScore: number;
   dataConfidenceScore: number;
+  confidenceReasons: string[];
   positives: string[];
   negatives: string[];
   missing: string[];
@@ -55,7 +56,8 @@ export type ProviderState = {
     | "unavailable"
     | "request_failed"
     | "no_data"
-    | "not_applicable";
+    | "not_applicable"
+    | "not_requested";
   provider: string;
   reason?: string | null;
 };
