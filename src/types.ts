@@ -114,6 +114,9 @@ export type Forecast = {
       interpolationNotice: string;
     };
     model: Record<string, unknown> & {
+      status?: string;
+      available?: boolean;
+      reason?: string | null;
       events?: Array<{
         type: "HIGH" | "LOW";
         timestampUtc: string;

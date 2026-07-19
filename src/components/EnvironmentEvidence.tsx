@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Forecast, TideSource } from "../types";
 import { getEot20Tide, type Eot20Model } from "../api";
+import { canSelectEot20 } from "../domain/tideAvailability";
 const time = (value: string | undefined, timezone: string) =>
   value
     ? new Intl.DateTimeFormat("zh-CN", {
@@ -33,7 +34,7 @@ export function EnvironmentEvidence({
   const model = onDemandModel?.spotId === forecast.spot.id ? onDemandModel.model : initialModel;
   const visibleModelError = modelError?.spotId === forecast.spot.id ? modelError.message : "";
   const modelAvailable = Boolean(model.events);
-  const modelSelectable = modelAvailable || initialModel.status === "REAL";
+  const modelSelectable = canSelectEot20(initialModel) || canSelectEot20(model);
   const officialAvailable = Boolean(official?.events.length);
   const comparison = (() => {
     if (storedComparison || !official?.events.length || !model.events?.length) return storedComparison;

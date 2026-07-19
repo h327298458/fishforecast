@@ -486,17 +486,24 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
         eot20Applicability(spot.spotType, spot.waterType),
       tideRuleVersion: RULE_VERSION,
       official,
-      model: eot20 ?? {
-        ...eot20Status(),
+      model: eot20 ?? (() => {
+        const installation = eot20Status();
+        const installed = installation.status === "REAL";
+        return {
+        ...installation,
+        available: installed,
         status:
-          preferredTideSource === "EOT20_MODEL" ? "UNAVAILABLE" : "NOT_REQUESTED",
+          preferredTideSource === "EOT20_MODEL" || !installed ? "UNAVAILABLE" : "NOT_REQUESTED",
         calculated: false,
         reason:
           preferredTideSource === "EOT20_MODEL"
             ? (eot20FailureReason ?? "EOT20_UNAVAILABLE")
-            : "ON_DEMAND_MODEL_NOT_REQUESTED",
+            : installed
+              ? "ON_DEMAND_MODEL_NOT_REQUESTED"
+              : installation.reason,
         applicability: eot20Applicability(spot.spotType, spot.waterType),
-      },
+        };
+      })(),
       comparison:
         officialNextHigh && modelNextHigh
           ? {
@@ -616,13 +623,17 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
           ? "available"
           : preferredTideSource === "EOT20_MODEL"
             ? "unavailable"
-            : "not_requested",
+            : eot20Status().status === "REAL"
+              ? "not_requested"
+              : "unavailable",
         provider: "EOT20",
         reason: eot20
           ? null
           : preferredTideSource === "EOT20_MODEL"
             ? (eot20FailureReason ?? eot20Status().reason ?? "EOT20_UNAVAILABLE")
-            : "ON_DEMAND_MODEL_NOT_REQUESTED",
+            : eot20Status().status === "REAL"
+              ? "ON_DEMAND_MODEL_NOT_REQUESTED"
+              : (eot20Status().reason ?? "EOT20_UNAVAILABLE"),
       },
       warnings: {
         status: warnings ? "available" : "unavailable",
