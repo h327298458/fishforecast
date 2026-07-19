@@ -25,7 +25,7 @@ let state: TideImportCheckState = {
 export function checkOfficialTideYears(db: Database.Database, now = new Date()) {
   const currentYear = now.getUTCFullYear();
   const nextYear = currentYear + 1;
-  const rows = db.prepare("SELECT DISTINCT source_year AS year FROM tide_imports WHERE state='NSW' AND parse_status='SUCCESS' ORDER BY source_year").all() as Array<{ year: number }>;
+  const rows = db.prepare("SELECT DISTINCT source_year AS year FROM tide_imports WHERE state='NSW' AND parse_status='VALID' ORDER BY source_year").all() as Array<{ year: number }>;
   const years = rows.map((row) => Number(row.year));
   const nextYearAvailable = years.includes(nextYear);
   state = {

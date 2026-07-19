@@ -18,6 +18,12 @@ The mounted host directory must contain:
 EOT20/ocean_tides/*_ocean_eot20.nc
 ```
 
+BOM NSW 2026/2027 and MSQ Gold Coast 2026 official tide source files are
+bundled separately from the large EOT20 model. On the first start with an empty
+SQLite volume they are verified and imported automatically. Later container
+starts skip complete imports; check `officialTideBootstrap` in
+`/api/system-status` for imported/skipped/error counts.
+
 Create `.env.server` (do not commit it):
 
 ```text

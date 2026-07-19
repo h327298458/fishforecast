@@ -132,7 +132,9 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
         const officialAvailable = Boolean(baseForecast.tides.official?.events.length);
         updateProgress(requestId, [
           { id: "base", status: "completed", detail: "天气、风、Marine 与安全信息已可先查看" },
-          { id: "official", status: "completed", detail: officialAvailable ? `已匹配 ${baseForecast.tides.official?.station.name ?? "官方参考港"}` : "当前时段没有匹配到可用的官方潮汐事件" },
+          { id: "official", status: "completed", detail: officialAvailable
+            ? `已匹配 ${String(baseForecast.tides.official?.station.station_name ?? baseForecast.tides.official?.station.name ?? "官方参考港")}`
+            : `当前时段没有匹配到可用的官方潮汐事件：${baseForecast.providerStatus.officialTide.reason ?? "UNKNOWN"}` },
         ]);
         if (baseForecast.tides.calculationStatus !== "PENDING") {
           setBaselineForecast(null);
@@ -195,7 +197,9 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
       setBaselineForecast(null);
       setProgress((current) => current ? updateForecastProgress(current, [
         { id: "base", status: "completed", detail: "优先复用同一坐标已获取的天气、实况与海况" },
-        { id: "official", status: "completed", detail: "复用当前坐标的官方参考港匹配" },
+        { id: "official", status: "completed", detail: recalculated.tides.official?.events.length
+          ? `复用当前坐标已匹配的 ${String(recalculated.tides.official.station.station_name ?? recalculated.tides.official.station.name ?? "官方参考港")}`
+          : `已重新检查当前坐标：${recalculated.providerStatus.officialTide.reason ?? "没有可用的官方参考港事件"}` },
         { id: "eot20", status: "completed", detail: "复用当前坐标和时段的潮汐模型缓存" },
         { id: "scoring", status: "completed", detail: "钓点类型与钓法适用性已重新评估" },
       ]) : current);

@@ -138,6 +138,7 @@ export type Forecast = {
     official: null | {
       station: Record<string, string | number>;
       events: Array<{ type: "HIGH" | "LOW"; timeUtc: string; heightM: number }>;
+      dataYears?: number[];
       timeOffsetMinutes: number;
       heightOffsetM: number;
       stationLocked: boolean;

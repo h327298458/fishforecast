@@ -57,6 +57,7 @@ export function importMsqTideFile(db: Database.Database, input: { text: string; 
   const importId = randomUUID();
   const sha256 = createHash('sha256').update(input.text).digest('hex');
   const tx = db.transaction(() => {
+    db.prepare("UPDATE tide_imports SET parse_status='SUPERSEDED' WHERE station_id=? AND source_year=? AND parse_status='VALID'").run(parsed.station.id, sourceYear);
     db.prepare(`INSERT INTO tide_imports (id,provider,source_type,source_year,state,station_id,station_name,original_filename,source_url,downloaded_at_utc,file_sha256,attribution,parser_version,parse_status,row_count)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'VALID',?)`).run(importId, 'Maritime Safety Queensland', 'STATE_OFFICIAL_TIDE_DATA', sourceYear, 'QLD', parsed.station.id, parsed.station.name, input.filename, input.sourceUrl, input.downloadedAtUtc, sha256, '© State of Queensland (Transport and Main Roads), CC BY 4.0', OFFICIAL_TIDE_PARSER_VERSION, parsed.readingCount);
     db.prepare(`INSERT INTO tide_stations (station_id,provider,source_type,station_name,latitude,longitude,state,timezone,datum,source_year,import_id,updated_at_utc)

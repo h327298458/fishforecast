@@ -111,18 +111,22 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
     rockAccessRequired: Boolean(preference?.rock_access_required),
     sheltered: Boolean(preference?.has_building_shelter) || Boolean(preference?.has_cliff_shelter),
   };
+  const officialEventRows = officialStation && db
+    ? officialEvents(
+        db,
+        String(officialStation.station_id),
+        new Date(start.getTime() - 12 * 3_600_000).toISOString(),
+        end.toISOString(),
+        timeOffset,
+        heightOffset,
+      )
+    : [];
   const official =
     officialStation && db
       ? {
           station: officialStation,
-          events: officialEvents(
-            db,
-            String(officialStation.station_id),
-            new Date(start.getTime() - 12 * 3_600_000).toISOString(),
-            end.toISOString(),
-            timeOffset,
-            heightOffset,
-          ),
+          events: officialEventRows,
+          dataYears: [...new Set(officialEventRows.map((event) => Number(event.sourceYear)))].sort(),
           timeOffsetMinutes: timeOffset,
           heightOffsetM: heightOffset,
           stationLocked: Boolean(lockedStationId),
@@ -731,7 +735,11 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
             ? "no_data"
             : "unavailable",
         provider: "BOM/MSQ official station",
-        reason: official ? "NO_EVENTS" : "NO_NEARBY_IMPORTED_STATION",
+        reason: official?.events.length
+          ? null
+          : official
+            ? "NO_EVENTS_IN_QUERY_RANGE"
+            : "NO_NEARBY_IMPORTED_STATION",
       },
       eot20: {
         status: eot20

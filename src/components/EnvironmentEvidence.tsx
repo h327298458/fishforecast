@@ -335,7 +335,7 @@ function OfficialPanel({
       <p>
         参考港：{String(station.station_name)} ·{" "}
         {Number(station.distanceKm).toFixed(1)} km · 数据年{" "}
-        {String(station.source_year)}
+        {official.dataYears?.length ? official.dataYears.join(" / ") : String(station.source_year)}
       </p>
       <p>
         坐标：{Number(station.latitude).toFixed(4)},{" "}

@@ -37,6 +37,8 @@ docker compose --env-file .env.server \
   up -d --build
 ```
 
+镜像内置已经核验哈希的 BOM NSW 2026/2027 原始潮汐表和 MSQ Gold Coast 2026 CSV。应用首次连接一个空 SQLite volume 时会自动、逐文件导入；已有完整导入会跳过，因此 `git pull`、重建镜像或容器重启不会重复写入。可在 `/system-status` 的 `officialTideBootstrap` 和 `officialTideImports` 查看导入结果，无需进入容器手工运行导入脚本。
+
 ## EOT20 模型
 
 应用使用 Geoscience Australia `eo-tides` 支持的开放 EOT20 NetCDF。模型约 2.3GB，不进入 Git，也不复制进 Docker 镜像；服务端只读挂载：

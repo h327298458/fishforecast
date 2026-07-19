@@ -15,6 +15,7 @@ import { calculateEot20, eot20Status } from "./providers/eot20.js";
 import { nearestOfficialStations } from "./providers/bomOfficialTide.js";
 import { RULE_VERSION } from "./domain/scoring.js";
 import { officialTideYearCheckState, startOfficialTideYearChecker } from "./services/tideImportScheduler.js";
+import { bootstrapOfficialTides } from "./services/officialTideBootstrap.js";
 import { authenticate, changePassword, createInvitation, createSession, deleteSession, getSessionUser, listInvitations, listUsers, registerWithInvitation, revokeInvitation, revokeUserSessions, seedInitialAdmin, setUserDisabled, type AuthUser } from "./auth.js";
 
 const app = Fastify({ logger: true });
@@ -34,6 +35,9 @@ mkdirSync(dirname(dbPath), { recursive: true });
 const db = new Database(dbPath);
 db.pragma("foreign_keys = ON");
 applyMigrations(db);
+const officialTideBootstrap = await bootstrapOfficialTides(db);
+if (officialTideBootstrap.status === "READY") app.log.info(officialTideBootstrap, "official tide seed data ready");
+else app.log.warn(officialTideBootstrap, "official tide seed data degraded");
 startOfficialTideYearChecker(db);
 const seededAdmin = seedInitialAdmin(db);
 if (seededAdmin) app.log.info({ username: seededAdmin.username }, "initial administrator created");
@@ -559,6 +563,7 @@ app.get("/api/system-status", async () => {
       lastSuccess: providerHealth.marine.lastSuccess,
     },
     officialTideImports: tideImports,
+    officialTideBootstrap,
     eot20: eot20Status(),
     providers: providerHealth,
     database: {
