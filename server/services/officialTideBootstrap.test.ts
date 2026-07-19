@@ -1,4 +1,7 @@
 import Database from "better-sqlite3";
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { applyMigrations } from "../db/applyMigrations.js";
 import { nearestOfficialStations, officialEvents } from "../providers/bomOfficialTide.js";
@@ -26,4 +29,32 @@ describe("official tide startup bootstrap", () => {
     expect(second.eventCount).toBe(first.eventCount);
     db.close();
   }, 20_000);
+
+  it("reports a missing pre-extracted PDF text file without crashing the server", async () => {
+    const root = resolve(tmpdir(), `tideline-tide-seed-${Date.now()}`);
+    const nswRoot = resolve(root, "bom-nsw");
+    mkdirSync(nswRoot, { recursive: true });
+    const [record] = JSON.parse(
+      readFileSync("data/raw/tides/bom-nsw/downloads-manifest.json", "utf8").replace(/^\uFEFF/, ""),
+    ) as Array<{ filename: string }>;
+    writeFileSync(
+      resolve(nswRoot, "downloads-manifest.json"),
+      JSON.stringify([record]),
+    );
+    copyFileSync(
+      resolve("data/raw/tides/bom-nsw", record.filename),
+      resolve(nswRoot, record.filename),
+    );
+
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    try {
+      const state = await bootstrapOfficialTides(db, root);
+      expect(state.status).toBe("UNAVAILABLE");
+      expect(state.errors[0]).toContain("PREEXTRACTED_TEXT_MISSING");
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

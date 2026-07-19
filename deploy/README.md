@@ -24,6 +24,13 @@ SQLite volume they are verified and imported automatically. Later container
 starts skip complete imports; check `officialTideBootstrap` in
 `/api/system-status` for imported/skipped/error counts.
 
+The NSW PDF text is extracted ahead of deployment with
+`npm run tides:nsw:extract`. The original PDFs and their manifest hashes remain
+the audited source, while the production server reads the committed `.pdf.txt`
+sidecars. This deliberately keeps PDF.js and its optional native Canvas package
+out of the low-memory runtime startup path. Run the extraction command again
+after downloading a new annual BOM file and commit the matching sidecar.
+
 Create `.env.server` (do not commit it):
 
 ```text

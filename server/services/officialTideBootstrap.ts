@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type Database from "better-sqlite3";
-import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { importMsqTideFile } from "../providers/bomOfficialTide.js";
 import { importBomNswTideFile } from "../providers/bomNswTide.js";
 
@@ -44,21 +43,6 @@ const alreadyImported = (db: Database.Database, stationId: string, sourceYear: n
   return Boolean(validImport) && validEventCount(db, stationId, sourceYear) >= minimumEvents;
 };
 
-async function extractPdfText(binary: Buffer) {
-  const document = await getDocument({ data: new Uint8Array(binary), verbosity: 0 }).promise;
-  try {
-    const pages: string[] = [];
-    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
-      const page = await document.getPage(pageNumber);
-      const content = await page.getTextContent();
-      pages.push(content.items.map((item) => "str" in item ? item.str : "").join(" "));
-    }
-    return pages.join(" ");
-  } finally {
-    await document.destroy();
-  }
-}
-
 export async function bootstrapOfficialTides(db: Database.Database, seedRoot = defaultSeedRoot()): Promise<OfficialTideBootstrapState> {
   let importedFiles = 0, skippedFiles = 0;
   const errors: string[] = [];
@@ -77,7 +61,9 @@ export async function bootstrapOfficialTides(db: Database.Database, seedRoot = d
           const binary = readFileSync(resolve(nswRoot, record.filename));
           const actualHash = createHash("sha256").update(binary).digest("hex");
           if (actualHash !== record.sha256.toLowerCase()) throw new Error("SOURCE_HASH_MISMATCH");
-          const text = await extractPdfText(binary);
+          const textPath = resolve(nswRoot, `${record.filename}.txt`);
+          if (!existsSync(textPath)) throw new Error("PREEXTRACTED_TEXT_MISSING");
+          const text = readFileSync(textPath, "utf8");
           importBomNswTideFile(db, { text, binary, filename: record.filename, sourceUrl: record.sourceUrl, downloadedAtUtc: record.downloadedAtUtc, stationId: record.stationId });
           importedFiles += 1;
         } catch (error) {

@@ -18,6 +18,7 @@
     "tides:eot20:validate": "tsx scripts/validate-eot20.ts",
     "test:eot20": "vitest run --config vitest.eot20.config.ts",
     "tides:nsw:download": "powershell -ExecutionPolicy Bypass -File scripts/download-bom-nsw-tides.ps1",
+    "tides:nsw:extract": "tsx scripts/extract-bom-nsw-tide-text.ts",
     "tides:nsw:import": "tsx scripts/import-bom-nsw-tides.ts",
     "test:nsw-tides": "vitest run --config vitest.nsw-tides.config.ts"
     ,"test:e2e": "npm run build && node scripts/e2e-smoke.mjs"
