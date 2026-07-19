@@ -26,7 +26,11 @@ export function EnvironmentEvidence({
   onTideSource: (source: TideSource) => void;
   onOfficialSettings: (options: Record<string, unknown>) => void;
 }) {
-  const [mode, setMode] = useState<Mode>("official");
+  const [mode, setMode] = useState<Mode>(() =>
+    forecast.tides.actualTideSourceUsed === "EOT20_MODEL"
+      ? "model"
+      : "official",
+  );
   const [onDemandModel, setOnDemandModel] = useState<{ spotId: string; model: Eot20Model } | null>(null);
   const [modelLoading, setModelLoading] = useState(false);
   const [modelError, setModelError] = useState<{ spotId: string; message: string } | null>(null);
@@ -76,7 +80,7 @@ export function EnvironmentEvidence({
             对比模式
           </button>
         </div>
-        <h3>双潮汐证据</h3>
+        <h3>潮汐来源与对比</h3>
         <p>
           <b>本次评分实际使用：</b>
           {forecast.tides.actualTideSourceUsed}

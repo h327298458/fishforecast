@@ -47,6 +47,7 @@ import { InvitationManager } from "./components/InvitationManager";
 import { AccountSecurity } from "./components/AccountSecurity";
 import { SpotSafetySettings } from "./components/SpotSafetySettings";
 import { SpotComparisonTable } from "./components/SpotComparisonTable";
+import { TideSourceControl } from "./components/TideSourceControl";
 import "./styles.css";
 
 type View = "forecast" | "compare" | "logs" | "analytics" | "settings";
@@ -279,16 +280,35 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
   }
   const current = forecast?.days[day],
     best = useMemo(
-      () =>
-        current?.hours.reduce(
+      () => {
+        const generatedAt = new Date(forecast?.generatedAtUtc ?? 0).getTime();
+        const actionable = current?.hours.filter(
+          (hour) =>
+            new Date(hour.timestampUtc).getTime() >= generatedAt - 3_600_000,
+        );
+        const candidates = actionable?.length ? actionable : current?.hours;
+        return candidates?.reduce(
           (a, b) =>
             a.score.fishingConditionScore > b.score.fishingConditionScore
               ? a
               : b,
-          current.hours[0],
-        ),
-      [current],
+          candidates[0],
+        );
+      },
+      [current, forecast?.generatedAtUtc],
     );
+  const tideChartHours =
+    forecast?.tides.actualTideSourceUsed === "EOT20_MODEL" &&
+    forecast.tides.model.values?.length &&
+    current
+      ? forecast.tides.model.values
+          .filter((value) => value.timestampLocal.slice(0, 10) === current.date)
+          .map((value) => ({
+            timestampUtc: value.timestampUtc,
+            timestampLocal: value.timestampLocal,
+            tideHeightM: value.heightM,
+          }))
+      : current?.hours;
   const isSaved = Boolean(point && saved.some((item) => item.id === point.id));
   return (
     <div className="app">
@@ -450,6 +470,10 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
                 </p>
               ) : null}
               <RecommendedWindows windows={current.windows} timezone={point.timezone} />
+              <TideSourceControl
+                forecast={forecast}
+                onSelect={(source) => void chooseTideSource(source)}
+              />
               <ProviderStrip status={forecast.providerStatus} />
               <div className="day-tabs" role="tablist">
                 {forecast.days.map((d, i) => (
@@ -472,7 +496,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
                 ))}
               </div>
               <TideChart
-                hours={current.hours}
+                hours={tideChartHours ?? current.hours}
                 windows={current.windows}
                 timezone={point.timezone}
               />
@@ -512,6 +536,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
               <details className="environment-details">
                 <summary>查看潮汐、警告、实况、海域与水文依据</summary>
                 <EnvironmentEvidence
+                  key={`${point.id}-${forecast.tides.actualTideSourceUsed}`}
                   forecast={forecast}
                   timezone={point.timezone}
                   spotType={spotType}

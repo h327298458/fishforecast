@@ -122,6 +122,11 @@ export type Forecast = {
         timestampUtc: string;
         heightM: number;
       }>;
+      values?: Array<{
+        timestampUtc: string;
+        timestampLocal: string;
+        heightM: number;
+      }>;
       applicability?: string;
     };
     comparison: null | {

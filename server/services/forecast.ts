@@ -25,6 +25,11 @@ import {
 import { getNswMhlWaveObservation } from "../providers/nswMhlWave.js";
 import { getBrooklynHydrology } from "../providers/brooklynHydrology.js";
 import { getRegulationEntry } from "../providers/regulations.js";
+import {
+  resolveActualTideSource,
+  shouldCalculateEot20ForForecast,
+  type CanonicalTideSource,
+} from "./tideSelection.js";
 
 const baseSpot = {
   id: "selected-location",
@@ -124,14 +129,28 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
             "根据官方10分钟预测序列提取高低潮事件；小时曲线为事件间显示插值。",
         }
       : null;
-  // EOT20 starts a Python process and loads NetCDF constituents. Do not make an
-  // official-port forecast wait for it merely to render an optional comparison.
-  // The model is calculated when selected for scoring or requested from its own API.
+  const eot20Installation = eot20Status();
+  const eot20WaterApplicability = eot20Applicability(
+    spot.spotType,
+    spot.waterType,
+  );
+  const shouldCalculateEot20 = shouldCalculateEot20ForForecast({
+    preferredSource: preferredTideSource as CanonicalTideSource,
+    officialAvailable: Boolean(official?.events.length),
+    officialStationLocked: Boolean(lockedStationId),
+    modelInstalled: eot20Installation.status === "REAL",
+    modelApplicable: eot20WaterApplicability !== "NOT_APPLICABLE",
+  });
+  // Keep the current-day curve complete. The numerical model starts 24 hours
+  // before the weather range so midnight values are available even when the
+  // first request is made late in the day. These are model values, not a flat
+  // extrapolation of the first current-time value.
+  const eot20Start = new Date(start.getTime() - 24 * 3_600_000);
   const eot20Task =
-    preferredTideSource === "EOT20_MODEL"
+    shouldCalculateEot20
       ? calculateEot20({
           ...point,
-          startUtc: start.toISOString(),
+          startUtc: eot20Start.toISOString(),
           endUtc: end.toISOString(),
           intervalMinutes: 60,
           spotType: spot.spotType,
@@ -182,12 +201,12 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
     ? matchBomWarnings(warnings.warnings, point, spot.state)
     : null;
   const mApplicability = marineApplicability(spot.spotType, spot.waterType);
-  const selectedTide =
-    preferredTideSource === "EOT20_MODEL" && eot20
-      ? "EOT20_MODEL"
-      : preferredTideSource === "BOM_OFFICIAL" && official?.events.length
-        ? "BOM_OFFICIAL"
-        : "NO_TIDE";
+  const selectedTide = resolveActualTideSource({
+    preferredSource: preferredTideSource as CanonicalTideSource,
+    officialAvailable: Boolean(official?.events.length),
+    officialStationLocked: Boolean(lockedStationId),
+    modelAvailable: Boolean(eot20),
+  });
   const tideFallbackReason =
     selectedTide === preferredTideSource
       ? null
@@ -196,9 +215,13 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
             eot20R.status === "rejected" ? eot20R.reason : "EOT20_UNAVAILABLE",
           )
         : preferredTideSource === "BOM_OFFICIAL"
-          ? lockedStationId
-            ? "LOCKED_OFFICIAL_STATION_UNAVAILABLE"
-            : "OFFICIAL_TIDE_UNAVAILABLE"
+          ? selectedTide === "EOT20_MODEL"
+            ? "OFFICIAL_TIDE_UNAVAILABLE_AUTO_EOT20"
+            : lockedStationId
+              ? "LOCKED_OFFICIAL_STATION_UNAVAILABLE"
+              : shouldCalculateEot20
+                ? "OFFICIAL_TIDE_UNAVAILABLE_AND_EOT20_FALLBACK_FAILED"
+                : "OFFICIAL_TIDE_UNAVAILABLE"
           : null;
   const marineForecastMaxKnots = bomMarine
     ? Math.max(
@@ -427,10 +450,14 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
     date,
     hours: slice,
     windows: mergeWindows(
-      slice.map((hour) => ({
-        timestampUtc: hour.timestampUtc,
-        score: hour.score,
-      })),
+      slice
+        .filter(
+          (hour) => new Date(hour.timestampUtc).getTime() >= start.getTime(),
+        )
+        .map((hour) => ({
+          timestampUtc: hour.timestampUtc,
+          score: hour.score,
+        })),
     ).slice(0, 2),
   }));
   const officialNextHigh = official?.events.find(
@@ -487,16 +514,16 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
       tideRuleVersion: RULE_VERSION,
       official,
       model: eot20 ?? (() => {
-        const installation = eot20Status();
+        const installation = eot20Installation;
         const installed = installation.status === "REAL";
         return {
         ...installation,
         available: installed,
         status:
-          preferredTideSource === "EOT20_MODEL" || !installed ? "UNAVAILABLE" : "NOT_REQUESTED",
+          shouldCalculateEot20 || !installed ? "UNAVAILABLE" : "NOT_REQUESTED",
         calculated: false,
         reason:
-          preferredTideSource === "EOT20_MODEL"
+          shouldCalculateEot20
             ? (eot20FailureReason ?? "EOT20_UNAVAILABLE")
             : installed
               ? "ON_DEMAND_MODEL_NOT_REQUESTED"
@@ -621,19 +648,19 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
       eot20: {
         status: eot20
           ? "available"
-          : preferredTideSource === "EOT20_MODEL"
+          : shouldCalculateEot20
             ? "unavailable"
-            : eot20Status().status === "REAL"
+            : eot20Installation.status === "REAL"
               ? "not_requested"
               : "unavailable",
         provider: "EOT20",
         reason: eot20
           ? null
-          : preferredTideSource === "EOT20_MODEL"
-            ? (eot20FailureReason ?? eot20Status().reason ?? "EOT20_UNAVAILABLE")
-            : eot20Status().status === "REAL"
+          : shouldCalculateEot20
+            ? (eot20FailureReason ?? eot20Installation.reason ?? "EOT20_UNAVAILABLE")
+            : eot20Installation.status === "REAL"
               ? "ON_DEMAND_MODEL_NOT_REQUESTED"
-              : (eot20Status().reason ?? "EOT20_UNAVAILABLE"),
+              : (eot20Installation.reason ?? "EOT20_UNAVAILABLE"),
       },
       warnings: {
         status: warnings ? "available" : "unavailable",
@@ -682,7 +709,7 @@ function interpolateOfficial(events: TideEvent[], timestampUtc: string) {
   };
 }
 
-function interpolateEot20(
+export function interpolateEot20(
   values: Array<{
     timestampUtc: string;
     heightM: number;
@@ -696,7 +723,11 @@ function interpolateEot20(
   );
   if (nextIndex === -1) return null;
   const next = values[nextIndex];
-  if (new Date(next.timestampUtc).getTime() === time || nextIndex === 0) {
+  const nextTime = new Date(next.timestampUtc).getTime();
+  // Never extend the first model value backwards. That rendered a fake flat
+  // line from local midnight until the model request's current-hour start.
+  if (nextIndex === 0 && nextTime !== time) return null;
+  if (nextTime === time) {
     return { heightM: next.heightM, phase: next.phase };
   }
   const previous = values[nextIndex - 1];

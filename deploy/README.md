@@ -65,9 +65,11 @@ docker compose --env-file .env.server -f deploy/compose.server.yml exec app \
 curl -fsS http://127.0.0.1:8000/api/system-status
 ```
 
-The first uncached EOT20 request can be CPU and memory intensive. Official-port
-forecasts do not launch Python; EOT20 is calculated only when selected or when
-the comparison endpoint is explicitly requested.
+The first uncached EOT20 request can be CPU and memory intensive. A forecast
+with usable official-port events does not launch Python merely for comparison.
+When the default official source has no events and no station is explicitly
+locked, an installed EOT20 model is used as a clearly labelled automatic
+fallback; subsequent matching requests use the aligned disk cache.
 
 For later updates, keep local server overrides in `.env.server` and use only the
 tracked `deploy/` files. Then a normal update is conflict-free:

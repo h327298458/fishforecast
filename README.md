@@ -53,7 +53,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-eot20.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\check-eot20.ps1
 ```
 
-官方参考港模式不会阻塞等待 Python；EOT20 只在用户选择模型评分或打开模型/对比时按需计算。请求范围对齐 UTC 整点，使内存和磁盘缓存可以复用。缺少或损坏模型时返回明确 `MODEL_FILES_MISSING`/校验错误，绝不生成正弦假潮汐。
+有覆盖事件的官方参考港模式不会为对比而额外阻塞等待 Python。若默认官方源没有覆盖事件、用户没有锁定官方站且本机 EOT20 可用，系统会明确提示并自动采用 EOT20，避免首次使用出现空潮汐；用户仍可在推荐窗口下方直接切换来源。请求范围对齐 UTC 整点并覆盖当前本地日，使内存及磁盘缓存可以复用、曲线不会把首个值向午夜倒推。缺少或损坏模型时返回明确 `MODEL_FILES_MISSING`/校验错误，绝不生成正弦假潮汐。
 
 ## 数据与适用性
 

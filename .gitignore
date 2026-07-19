@@ -5,6 +5,9 @@ data/tide-models/
 data/tide-model-cache/
 data/eot20-cache/
 data/eot20-test-cache/
+data/*eot20-cache/
+data/*-forecast.json
+data/live-*.json
 data/*.log
 .env
 .env.server

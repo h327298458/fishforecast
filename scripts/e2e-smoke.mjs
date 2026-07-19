@@ -1,5 +1,6 @@
 /* global process, fetch, setTimeout, URL, navigator, document */
 import { spawn } from "node:child_process";
+import { rmSync } from "node:fs";
 import { chromium } from "playwright-core";
 
 const port = 8897;
@@ -20,10 +21,11 @@ async function waitForServer() {
 const point = { id: "draft-bondi", name: "Bondi Beach", address: "Bondi Beach NSW 2026, Australia", latitude: -33.8915, longitude: 151.2767, state: "NSW", timezone: "Australia/Sydney", countryCode: "AU" };
 const forecast = (url) => {
   const source = new URL(url).searchParams.get("preferredTideSource") ?? "BOM_OFFICIAL";
+  const actualSource = source === "BOM_OFFICIAL" ? "EOT20_MODEL" : source;
   const timestamp = new Date(); timestamp.setUTCMinutes(0, 0, 0);
   const score = { safetyStatus: "SAFE", safetyScore: 83, comfortScore: 78, fishingConditionScore: 76, dataConfidenceScore: 81, confidenceReasons: ["E2E fixture"], positives: ["平均风速较温和"], negatives: [], missing: [], ruleVersion: "e2e" };
-  const hours = Array.from({ length: 6 }, (_, index) => ({ timestampUtc: new Date(timestamp.getTime() + index * 3_600_000).toISOString(), timestampLocal: new Date(timestamp.getTime() + index * 3_600_000).toISOString(), temperatureC: 21, precipitationProbabilityPercent: 5, windSpeedKmh: 12, windGustKmh: 18, windDirectionDeg: 90, pressureHpa: 1016, waveHeightM: 1.1, swellPeriodSeconds: 9, modelSeaLevelTrendM: .1, tideHeightM: source === "NO_TIDE" ? null : .8 + index * .1, tidePhase: source === "NO_TIDE" ? null : "rising", warningSeverity: "none", sources: {}, score }));
-  return { snapshotId: null, spot: { ...point, spotType: "beach", fishingMethod: "bottom_fishing", waterType: "coastal", preferredTideSource: source }, generatedAtUtc: new Date().toISOString(), degraded: false, providerStatus: { weather: { status: "available", provider: "Open-Meteo" }, marine: { status: "available", provider: "Open-Meteo Marine" }, officialTide: { status: "available", provider: "BOM" }, eot20: { status: "not_requested", provider: "EOT20" }, warnings: { status: "available", provider: "BOM" } }, days: [{ date: timestamp.toISOString().slice(0, 10), hours, windows: [{ startUtc: hours[1].timestampUtc, endUtc: hours[4].timestampUtc, averageScore: 76 }] }], tides: { selectedSource: source, preferredSource: source, actualTideSourceUsed: source, fallbackReason: null, official: null, model: { status: "REAL", version: "EOT20-test", applicability: "APPLICABLE" }, comparison: null }, warnings: { status: "CLEAR", warnings: [] }, observation: {}, bomMarineForecast: { status: "available" }, nswMhlWave: { status: "available", applicability: "APPLICABLE" }, waterData: { status: "NOT_APPLICABLE" }, marineApplicability: { status: "APPLICABLE", confidence: .85, gridDistanceKm: .5, requestedCoordinates: { latitude: point.latitude, longitude: point.longitude }, returnedCoordinates: { latitude: point.latitude, longitude: point.longitude } }, rainfallContext: { status: "available" }, regulations: { status: "REAL", state: "NSW", officialLinks: [], notice: "test" } };
+  const hours = Array.from({ length: 24 }, (_, index) => ({ timestampUtc: new Date(timestamp.getTime() + index * 3_600_000).toISOString(), timestampLocal: new Date(timestamp.getTime() + index * 3_600_000).toISOString().slice(0, 19), temperatureC: 21, precipitationProbabilityPercent: 5, windSpeedKmh: 12, windGustKmh: 18, windDirectionDeg: 90, pressureHpa: 1016, waveHeightM: 1.1, swellPeriodSeconds: 9, modelSeaLevelTrendM: .1, tideHeightM: actualSource === "NO_TIDE" ? null : Math.sin(index / 2) * .7, tidePhase: actualSource === "NO_TIDE" ? null : "rising", warningSeverity: "none", sources: {}, score }));
+  return { snapshotId: null, spot: { ...point, spotType: "beach", fishingMethod: "bottom_fishing", waterType: "coastal", preferredTideSource: source }, generatedAtUtc: new Date().toISOString(), degraded: false, providerStatus: { weather: { status: "available", provider: "Open-Meteo" }, marine: { status: "available", provider: "Open-Meteo Marine" }, officialTide: { status: "unavailable", provider: "BOM" }, eot20: { status: "available", provider: "EOT20" }, warnings: { status: "available", provider: "BOM" } }, days: [{ date: timestamp.toISOString().slice(0, 10), hours, windows: [{ startUtc: hours[1].timestampUtc, endUtc: hours[4].timestampUtc, averageScore: 76 }, { startUtc: hours[14].timestampUtc, endUtc: hours[17].timestampUtc, averageScore: 74 }] }], tides: { selectedSource: actualSource, preferredSource: source, actualTideSourceUsed: actualSource, fallbackReason: source === "BOM_OFFICIAL" ? "OFFICIAL_TIDE_UNAVAILABLE_AUTO_EOT20" : null, official: null, model: { status: "available", available: true, version: "EOT20-test", applicability: "APPLICABLE", events: [{ type: "HIGH", timestampUtc: hours[3].timestampUtc, heightM: 1.2 }] }, comparison: null }, warnings: { status: "CLEAR", warnings: [] }, observation: {}, bomMarineForecast: { status: "available" }, nswMhlWave: { status: "available", applicability: "APPLICABLE" }, waterData: { status: "NOT_APPLICABLE" }, marineApplicability: { status: "APPLICABLE", confidence: .85, gridDistanceKm: .5, requestedCoordinates: { latitude: point.latitude, longitude: point.longitude }, returnedCoordinates: { latitude: point.latitude, longitude: point.longitude } }, rainfallContext: { status: "available" }, regulations: { status: "REAL", state: "NSW", officialLinks: [], notice: "test" } };
 };
 
 async function configureRoutes(page) {
@@ -55,6 +57,10 @@ try {
   await page.locator('[role="option"]').click();
   try { await page.locator(".recommended-windows").waitFor({ timeout: 10_000 }); }
   catch (error) { process.stderr.write(`${(await page.locator("body").innerText()).slice(0, 2000)}\n`); throw error; }
+  await page.locator(".tide-source-control").waitFor();
+  if ((await page.locator(".tide-source-control button.active").innerText()) !== "EOT20 模型") throw new Error("AUTO_EOT20_SOURCE_NOT_VISIBLE");
+  const drawnWindowLabels = (await page.locator(".chart svg text").allTextContents()).filter((value) => value.startsWith("窗口"));
+  if (drawnWindowLabels.length !== 2) throw new Error(`ALL_WINDOWS_NOT_DRAWN:${JSON.stringify(drawnWindowLabels)}`);
   await page.locator(".footer-actions button").first().click();
   await page.locator(".spot-list button").waitFor();
   await page.locator(".footer-actions .primary").click();
@@ -83,5 +89,13 @@ try {
   process.stdout.write("E2E PASS: search/save/refreshable persistence/log history + geolocation success/denied/timeout + 390x844 and 430x932\n");
 } finally {
   await browser?.close();
-  server.kill();
+  if (server.exitCode === null) {
+    server.kill();
+    await Promise.race([
+      new Promise((resolve) => server.once("exit", resolve)),
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ]);
+  }
+  for (const suffix of ["", "-shm", "-wal"])
+    rmSync(`${databasePath}${suffix}`, { force: true });
 }
