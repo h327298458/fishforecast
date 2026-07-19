@@ -10,6 +10,8 @@ The image keeps the real `eo-tides.model` and `pyTMD` calculation stack, but
 does not install unrelated satellite STAC, Dask-distributed, Arrow, plotting or
 machine-learning extras. This is important on small disks: none of those
 packages are used by TideLine's single-coordinate tide worker.
+The TypeScript server is bundled during the build, so the final image also does
+not carry the TypeScript compiler, Vite, Vitest, Playwright or `tsx`.
 The mounted host directory must contain:
 
 ```text

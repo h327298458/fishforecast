@@ -3,7 +3,10 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --include=dev
 COPY . .
-RUN npm run build
+RUN npm run build \
+  && ./node_modules/.bin/esbuild server/index.ts \
+       --bundle --platform=node --format=esm --packages=external \
+       --outfile=server-dist/index.js
 
 FROM node:24-bookworm-slim AS runtime
 WORKDIR /app
@@ -45,12 +48,11 @@ ENV NODE_ENV=production \
 
 COPY package*.json ./
 RUN npm ci --omit=dev --omit=optional \
-  && npm install --no-save --omit=dev --omit=optional "tsx@4.21.0" \
   && npm cache clean --force
 COPY --from=web-build /app/dist ./dist
-COPY --from=web-build /app/server ./server
-COPY --from=web-build /app/scripts ./scripts
-COPY --from=web-build /app/tsconfig.node.json ./
+COPY --from=web-build /app/server-dist ./server-dist
+COPY --from=web-build /app/server/db/migrations ./server/db/migrations
+COPY --from=web-build /app/scripts/eot20_runner.py ./scripts/eot20_runner.py
 RUN mkdir -p /app/data/tide-model-cache \
   && chown -R node:node /app/data
 
@@ -58,4 +60,4 @@ USER node
 EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:8787/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
-CMD ["node", "--import", "tsx", "server/index.ts"]
+CMD ["node", "server-dist/index.js"]
