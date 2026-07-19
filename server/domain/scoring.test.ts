@@ -14,3 +14,16 @@ it('limits a long safe run to its best actionable four-hour window',()=>{
   expect(windows).toHaveLength(1);
   expect((new Date(windows[0].endUtc).getTime()-new Date(windows[0].startUtc).getTime())/3_600_000).toBeLessThanOrEqual(4);
 });
+
+it('scores an exposed headwind more conservatively than a sheltered spot',()=>{
+  const windy={...env,windSpeedKmh:24,windGustKmh:38,windDirectionDeg:90};
+  const exposed=scoreHour(windy,'beach',{exposureDirectionDeg:90});
+  const sheltered=scoreHour(windy,'wharf',{exposureDirectionDeg:90,sheltered:true});
+  expect(exposed.safetyScore).toBeLessThan(sheltered.safetyScore);
+  expect(exposed.comfortScore).toBeLessThan(sheltered.comfortScore);
+  expect(exposed.negatives).toContain('当前风向正对钓点暴露方向');
+});
+
+it('honours a user gust limit as a hard safety block',()=>{
+  expect(scoreHour({...env,windGustKmh:36},'wharf',{maximumGustKmh:35}).safetyStatus).toBe('NOT_RECOMMENDED');
+});

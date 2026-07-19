@@ -16,7 +16,7 @@ import {
   nearestOfficialStations,
   officialEvents,
 } from "../providers/bomOfficialTide.js";
-import { scoreHour, mergeWindows, RULE_VERSION } from "../domain/scoring.js";
+import { scoreHour, mergeWindows, RULE_VERSION, type SpotSafetyProfile } from "../domain/scoring.js";
 import type { HourlyEnvironment } from "../domain/types.js";
 import {
   getRainContext,
@@ -24,6 +24,7 @@ import {
 } from "../providers/environmentContext.js";
 import { getNswMhlWaveObservation } from "../providers/nswMhlWave.js";
 import { getBrooklynHydrology } from "../providers/brooklynHydrology.js";
+import { getRegulationEntry } from "../providers/regulations.js";
 
 const baseSpot = {
   id: "selected-location",
@@ -93,6 +94,16 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
   );
   const timeOffset = Number(preference?.official_station_time_offset_min ?? 0),
     heightOffset = Number(preference?.official_station_height_offset_m ?? 0);
+  const optionalNumber = (value: unknown) => value === null || value === undefined || value === "" ? null : Number(value);
+  const safetyProfile: SpotSafetyProfile = {
+    exposureDirectionDeg: optionalNumber(preference?.exposure_direction_deg),
+    maximumWindKmh: optionalNumber(preference?.maximum_wind_kmh),
+    maximumGustKmh: optionalNumber(preference?.maximum_gust_kmh),
+    maximumWaveHeightM: optionalNumber(preference?.maximum_wave_height_m),
+    openCoast: Boolean(preference?.open_coast),
+    rockAccessRequired: Boolean(preference?.rock_access_required),
+    sheltered: Boolean(preference?.has_building_shelter) || Boolean(preference?.has_cliff_shelter),
+  };
   const official =
     officialStation && db
       ? {
@@ -403,7 +414,7 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
         reasons: confidenceReasons,
       },
     };
-    return { ...env, score: scoreHour(env, spot.spotType) };
+    return { ...env, score: scoreHour(env, spot.spotType, safetyProfile) };
   });
   const grouped = new Map<string, typeof hours>();
   for (const hour of hours) {
@@ -458,6 +469,7 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
             status: "BLOCKED_BY_PROVIDER_LIMITATION",
             detail: String(waterDataR.reason),
           },
+    regulations: getRegulationEntry(spot.state),
     tides: {
       selectedSource: selectedTide,
       preferredSource: preferredTideSource,

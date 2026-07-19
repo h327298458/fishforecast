@@ -11,6 +11,6 @@ export const providerHealth:Record<string,HealthState>={
   marineForecast:{status:'PARTIAL',lastSuccess:null,lastError:null,detail:'BOM official zone forecasts: Sydney text products and Gold Coast HTML fallback verified; national zone mapping incomplete'},
   nswMhlWave:{status:'PARTIAL',lastSuccess:null,lastError:null,detail:'Real NSW MHL offshore buoy observations for NSW locations; deep-water buoy is explicitly reduced for harbour and estuary spots'},
   waterData:{status:'PARTIAL',lastSuccess:null,lastError:null,detail:'Brooklyn/lower Hawkesbury MHL public Spencer water-level series and North Richmond upstream rainfall context; gauge is tidal and public route has no discharge series'},
-  regulations:{status:'NOT_IMPLEMENTED',lastSuccess:null,lastError:null,detail:'Official state entry links not yet exposed'},
+  regulations:{status:'REAL',lastSuccess:null,lastError:null,detail:'Verified official recreational-fishing entry links for all Australian states and territories; no unmaintained static bag-limit database'},
 };
 export function markHealth(name:string,ok:boolean,error?:unknown){const item=providerHealth[name];if(!item)return;if(ok){item.lastSuccess=new Date().toISOString();item.lastError=null}else item.lastError=error instanceof Error?error.message:String(error??'Unknown provider error')}

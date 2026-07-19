@@ -1,7 +1,8 @@
-import type { FishingLog, Forecast, LocationPoint, SavedSpot, TideSource } from "./types";
+import type { FishingLog, Forecast, LocationPoint, SavedSpot, SpotComparison, TideSource } from "./types";
 
 export type AuthUser = { id: string; username: string; role: "ADMIN" | "USER" };
 export type Invitation = { id: string; createdAtUtc: string; expiresAtUtc: string | null; maxUses: number; uses: number; revokedAtUtc: string | null; createdByUsername: string };
+export type ManagedUser = AuthUser & { createdAtUtc: string; lastLoginAtUtc: string | null; disabledAtUtc: string | null; activeSessions: number };
 export type Eot20Model = { model: string; version: string; applicability: string; confidence: number; calculationCoordinates: { latitude: number; longitude: number }; events: Array<{ type: "HIGH" | "LOW"; timestampUtc: string; timestampLocal: string; heightM: number }>; values: Array<{ timestampUtc: string; heightM: number }>; dailyRanges: Array<{ dateUtc: string; rangeM: number; highM: number; lowM: number }> };
 
 async function json<T>(response: Response, message: string) {
@@ -20,9 +21,13 @@ export async function getCurrentUser() { return json<{ authenticated: boolean; u
 export async function login(username: string, password: string) { return json<{ authenticated: true; user: AuthUser }>(await authFetch("/api/auth/login", jsonPost({ username, password })), "Login failed"); }
 export async function register(username: string, password: string, invitationCode: string) { return json<{ authenticated: true; user: AuthUser }>(await authFetch("/api/auth/register", jsonPost({ username, password, invitationCode })), "Registration failed"); }
 export async function logout() { return json<{ status: string }>(await authFetch("/api/auth/logout", { method: "POST" }), "Logout failed"); }
+export async function changePassword(currentPassword: string, newPassword: string) { return json<{ status: string }>(await authFetch("/api/auth/change-password", jsonPost({ currentPassword, newPassword })), "Unable to change password"); }
 export async function getInvitations() { return json<{ invitations: Invitation[] }>(await authFetch("/api/admin/invitations"), "Unable to read invitations"); }
 export async function createInvitation(maxUses: number, expiresAtUtc?: string) { return json<{ invitation: Invitation & { code: string } }>(await authFetch("/api/admin/invitations", jsonPost({ maxUses, expiresAtUtc: expiresAtUtc || undefined })), "Unable to create invitation"); }
 export async function revokeInvitation(id: string) { return json<{ status: string }>(await authFetch(`/api/admin/invitations/${encodeURIComponent(id)}/revoke`, { method: "POST" }), "Unable to revoke invitation"); }
+export async function getManagedUsers() { return json<{ users: ManagedUser[] }>(await authFetch("/api/admin/users"), "Unable to read users"); }
+export async function setManagedUserDisabled(id: string, disabled: boolean) { return json<{ status: string }>(await authFetch(`/api/admin/users/${encodeURIComponent(id)}/status`, jsonPost({ disabled })), "Unable to update user"); }
+export async function revokeManagedUserSessions(id: string) { return json<{ status: string; sessionsRevoked: number }>(await authFetch(`/api/admin/users/${encodeURIComponent(id)}/revoke-sessions`, { method: "POST" }), "Unable to revoke sessions"); }
 
 export async function searchLocations(query: string, focus?: { latitude: number; longitude: number }, signal?: AbortSignal) {
   const params = new URLSearchParams({ q: query });
@@ -42,6 +47,7 @@ export async function getEot20Tide(point: LocationPoint, spotType: string) {
   return result.data;
 }
 export async function getSpots() { return json<SavedSpot[]>(await authFetch("/api/spots"), "Unable to read saved spots"); }
+export async function getSpotComparisons() { return json<SpotComparison[]>(await authFetch("/api/spots/compare"), "Unable to compare saved spots"); }
 export async function saveSpot(point: LocationPoint, spotType: string, fishingMethod: string) { return json<SavedSpot>(await authFetch("/api/spots", jsonPost({ ...point, spotType, fishingMethod, waterType: waterTypeForSpot(spotType) })), "Unable to save spot"); }
 export async function saveEnvironmentPreferences(spotId: string, preferredTideSource: TideSource, options: Record<string, unknown> = {}) { return json<{ status: string }>(await authFetch(`/api/spots/${encodeURIComponent(spotId)}/environment-preferences`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ preferredTideSource, ...options }) }), "Unable to save tide settings"); }
 export async function getLogs() { return json<FishingLog[]>(await authFetch("/api/logs"), "Unable to read logs"); }

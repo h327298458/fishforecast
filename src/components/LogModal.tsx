@@ -12,17 +12,24 @@ export function LogModal({
 }) {
   const [done, setDone] = useState(false),
     [error, setError] = useState("");
+  const localInputValue = (date: Date) => new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+  const now = new Date();
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError("");
     const f = new FormData(e.currentTarget);
-    const now = new Date();
+    const startedAt = new Date(String(f.get("startedAt")));
+    const endedAt = new Date(String(f.get("endedAt")));
+    if (Number.isNaN(startedAt.getTime()) || Number.isNaN(endedAt.getTime()) || endedAt <= startedAt) {
+      setError("结束时间必须晚于开始时间");
+      return;
+    }
     try {
       await saveLog({
         spotId,
         forecastSnapshotId,
-        startedAtUtc: new Date(now.getTime() - 2 * 3600000).toISOString(),
-        endedAtUtc: now.toISOString(),
+        startedAtUtc: startedAt.toISOString(),
+        endedAtUtc: endedAt.toISOString(),
         method: f.get("method"),
         bait: f.get("bait"),
         lure: f.get("lure"),
@@ -75,6 +82,10 @@ export function LogModal({
             <h2 id="log-title">记录本次实钓</h2>
             <p>快速记录；详细装备信息可在日志页补充。</p>
             <form onSubmit={submit}>
+              <div className="form-row">
+                <label>实际开始时间<input name="startedAt" type="datetime-local" required defaultValue={localInputValue(new Date(now.getTime() - 2 * 3_600_000))} /></label>
+                <label>实际结束时间<input name="endedAt" type="datetime-local" required defaultValue={localInputValue(now)} /></label>
+              </div>
               <label>
                 钓法
                 <select name="method">

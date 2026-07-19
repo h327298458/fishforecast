@@ -14,7 +14,8 @@ import { applyMigrations } from "./db/applyMigrations.js";
 import { calculateEot20, eot20Status } from "./providers/eot20.js";
 import { nearestOfficialStations } from "./providers/bomOfficialTide.js";
 import { RULE_VERSION } from "./domain/scoring.js";
-import { authenticate, createInvitation, createSession, deleteSession, getSessionUser, listInvitations, registerWithInvitation, revokeInvitation, seedInitialAdmin, type AuthUser } from "./auth.js";
+import { officialTideYearCheckState, startOfficialTideYearChecker } from "./services/tideImportScheduler.js";
+import { authenticate, changePassword, createInvitation, createSession, deleteSession, getSessionUser, listInvitations, listUsers, registerWithInvitation, revokeInvitation, revokeUserSessions, seedInitialAdmin, setUserDisabled, type AuthUser } from "./auth.js";
 
 const app = Fastify({ logger: true });
 const allowedOrigins = new Set((process.env.ALLOWED_ORIGIN ?? "http://localhost:5173").split(",").map((value) => value.trim()).filter(Boolean));
@@ -33,6 +34,7 @@ mkdirSync(dirname(dbPath), { recursive: true });
 const db = new Database(dbPath);
 db.pragma("foreign_keys = ON");
 applyMigrations(db);
+startOfficialTideYearChecker(db);
 const seededAdmin = seedInitialAdmin(db);
 if (seededAdmin) app.log.info({ username: seededAdmin.username }, "initial administrator created");
 const geocoder = new PhotonGeocoding();
@@ -124,6 +126,20 @@ app.post("/api/auth/logout", async (request, reply) => {
   clearSessionCookie(reply);
   return { status: "signed_out" };
 });
+app.post("/api/auth/change-password", { config: { rateLimit: { max: 5, timeWindow: "1 hour" } } }, async (request, reply) => {
+  if (!requireSameOrigin(request, reply)) return;
+  const user = requireUser(request, reply);
+  if (!user) return;
+  const body = (request.body as Record<string, unknown>) ?? {};
+  try {
+    changePassword(db, user.id, body.currentPassword, body.newPassword);
+    const session = createSession(db, user.id);
+    sendSessionCookie(reply, session.token, session.expiresAtUtc);
+    return { status: "password_changed" };
+  } catch (error) {
+    return reply.code(400).send({ status: "invalid", reason: error instanceof Error ? error.message : "PASSWORD_CHANGE_FAILED", data: null });
+  }
+});
 app.get("/api/admin/invitations", async (request, reply) => {
   if (!requireAdmin(request, reply)) return;
   return { invitations: listInvitations(db) };
@@ -143,6 +159,29 @@ app.post("/api/admin/invitations/:id/revoke", async (request, reply) => {
   if (!requireSameOrigin(request, reply) || !requireAdmin(request, reply)) return;
   const id = String((request.params as { id: string }).id ?? "");
   return revokeInvitation(db, id) ? { status: "revoked", id } : reply.code(404).send({ status: "not_found", data: null });
+});
+app.get("/api/admin/users", async (request, reply) => {
+  if (!requireAdmin(request, reply)) return;
+  return { users: listUsers(db) };
+});
+app.post("/api/admin/users/:id/status", async (request, reply) => {
+  if (!requireSameOrigin(request, reply)) return;
+  const admin = requireAdmin(request, reply);
+  if (!admin) return;
+  const id = String((request.params as { id: string }).id ?? "");
+  try {
+    setUserDisabled(db, admin.id, id, Boolean((request.body as { disabled?: unknown })?.disabled));
+    return { status: "updated" };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "USER_STATUS_UPDATE_FAILED";
+    return reply.code(reason === "USER_NOT_FOUND" ? 404 : 400).send({ status: "invalid", reason, data: null });
+  }
+});
+app.post("/api/admin/users/:id/revoke-sessions", async (request, reply) => {
+  if (!requireSameOrigin(request, reply) || !requireAdmin(request, reply)) return;
+  const id = String((request.params as { id: string }).id ?? "");
+  try { return { status: "revoked", sessionsRevoked: revokeUserSessions(db, id) }; }
+  catch (error) { return reply.code(404).send({ status: "not_found", reason: error instanceof Error ? error.message : "USER_NOT_FOUND", data: null }); }
 });
 app.get("/api/geocode/search", async (req, reply) => {
   const q = req.query as Record<string, string>;
@@ -220,7 +259,7 @@ app.get("/api/forecast", async (req, reply) => {
       rainfallContext: forecast.rainfallContext,
       waterData: forecast.waterData,
       providerStatus: forecast.providerStatus,
-      days: forecast.days.map((day) => ({ date: day.date, windows: day.windows, scores: day.hours.map((hour) => ({ timestampUtc: hour.timestampUtc, score: hour.score, tideHeightM: hour.tideHeightM, tidePhase: hour.tidePhase })) })),
+      days: forecast.days.map((day) => ({ date: day.date, windows: day.windows, scores: day.hours.map((hour) => ({ timestampUtc: hour.timestampUtc, score: hour.score, windSpeedKmh: hour.windSpeedKmh, windGustKmh: hour.windGustKmh, tideHeightM: hour.tideHeightM, tidePhase: hour.tidePhase })) })),
     };
     db.prepare("INSERT INTO forecast_snapshots (id,spot_id,rule_version,payload_json,created_at_utc) VALUES (?,?,?,?,?)").run(snapshotId, spotId, RULE_VERSION, JSON.stringify(snapshot), new Date().toISOString());
   }
@@ -232,9 +271,40 @@ app.get("/api/spots", async (request, reply) => {
   if (!user) return;
   return db
     .prepare(
-      "SELECT s.id,s.name,COALESCE(s.address,'') AS address,s.latitude,s.longitude,s.state,s.timezone,s.spot_type AS spotType,s.water_type AS waterType,s.fishing_method AS fishingMethod,s.target_species AS targetSpecies,s.allow_night AS allowNight,s.created_at_utc AS createdAtUtc,COALESCE(p.preferred_tide_source,'BOM_OFFICIAL') AS preferredTideSource FROM spots s LEFT JOIN spot_environment_preferences p ON p.spot_id=s.id WHERE s.owner_user_id=? ORDER BY s.created_at_utc DESC",
+      "SELECT s.id,s.name,COALESCE(s.address,'') AS address,s.latitude,s.longitude,s.state,s.timezone,s.spot_type AS spotType,s.water_type AS waterType,s.fishing_method AS fishingMethod,s.target_species AS targetSpecies,s.allow_night AS allowNight,s.created_at_utc AS createdAtUtc,COALESCE(p.preferred_tide_source,'BOM_OFFICIAL') AS preferredTideSource,p.shoreline_direction_deg AS shorelineDirectionDeg,p.casting_direction_deg AS castingDirectionDeg,p.exposure_direction_deg AS exposureDirectionDeg,p.has_building_shelter AS hasBuildingShelter,p.has_cliff_shelter AS hasCliffShelter,p.open_coast AS openCoast,p.rock_access_required AS rockAccessRequired,p.slippery_access AS slipperyAccess,p.night_fishing_allowed AS nightFishingAllowed,p.lighting_available AS lightingAvailable,p.maximum_wind_kmh AS maximumWindKmh,p.maximum_gust_kmh AS maximumGustKmh,p.maximum_wave_height_m AS maximumWaveHeightM,p.notes FROM spots s LEFT JOIN spot_environment_preferences p ON p.spot_id=s.id WHERE s.owner_user_id=? ORDER BY s.created_at_utc DESC",
     )
     .all(user.id);
+});
+app.get("/api/spots/compare", async (request, reply) => {
+  const user = requireUser(request, reply);
+  if (!user) return;
+  const rows = db.prepare(`SELECT s.id AS spotId,s.name,s.latitude,s.longitude,fs.created_at_utc AS generatedAtUtc,fs.payload_json AS payloadJson
+    FROM spots s LEFT JOIN forecast_snapshots fs ON fs.id=(SELECT f2.id FROM forecast_snapshots f2 WHERE f2.spot_id=s.id ORDER BY f2.created_at_utc DESC LIMIT 1)
+    WHERE s.owner_user_id=? ORDER BY s.created_at_utc DESC`).all(user.id) as Array<Record<string, unknown>>;
+  type ComparisonScore = { safetyStatus?: string; safetyScore?: number; comfortScore?: number; fishingConditionScore?: number; dataConfidenceScore?: number };
+  type ComparisonHour = { score?: ComparisonScore };
+  type ComparisonSnapshot = { days?: Array<{ windows?: Array<Record<string, unknown>>; scores?: ComparisonHour[] }>; observation?: { selected?: { windSpeedKmh?: number | null } }; tides?: { actualTideSourceUsed?: string } };
+  return rows.map((row) => {
+    if (!row.payloadJson) return { spotId: row.spotId, name: row.name, latitude: row.latitude, longitude: row.longitude, status: "NO_SNAPSHOT" };
+    try {
+      const snapshot = JSON.parse(String(row.payloadJson)) as ComparisonSnapshot;
+      const firstDay = snapshot.days?.[0];
+      const best = (firstDay?.scores ?? []).reduce<ComparisonHour | null>((current, item) => !current || Number(item.score?.fishingConditionScore ?? -1) > Number(current.score?.fishingConditionScore ?? -1) ? item : current, null);
+      return {
+        spotId: row.spotId, name: row.name, latitude: row.latitude, longitude: row.longitude, status: "AVAILABLE", generatedAtUtc: row.generatedAtUtc,
+        bestWindow: firstDay?.windows?.[0] ?? null,
+        safetyStatus: best?.score?.safetyStatus ?? "UNKNOWN",
+        safetyScore: best?.score?.safetyScore ?? null,
+        comfortScore: best?.score?.comfortScore ?? null,
+        fishingConditionScore: best?.score?.fishingConditionScore ?? null,
+        confidenceScore: best?.score?.dataConfidenceScore ?? null,
+        observedWindKmh: snapshot.observation?.selected?.windSpeedKmh ?? null,
+        tideSource: snapshot.tides?.actualTideSourceUsed ?? "NO_TIDE",
+      };
+    } catch {
+      return { spotId: row.spotId, name: row.name, latitude: row.latitude, longitude: row.longitude, status: "INVALID_SNAPSHOT" };
+    }
+  });
 });
 app.get("/api/spots/:id", async (req, reply) => {
   const user = requireUser(req, reply);
@@ -289,7 +359,7 @@ app.post("/api/spots", async (req, reply) => {
     .send(
       db
         .prepare(
-          "SELECT id,name,address,latitude,longitude,state,timezone,spot_type AS spotType,fishing_method AS fishingMethod FROM spots WHERE id=? AND owner_user_id=?",
+          "SELECT id,name,COALESCE(address,'') AS address,latitude,longitude,state,timezone,spot_type AS spotType,water_type AS waterType,fishing_method AS fishingMethod,target_species AS targetSpecies,allow_night AS allowNight,created_at_utc AS createdAtUtc FROM spots WHERE id=? AND owner_user_id=?",
         )
         .get(id, user.id),
     );
@@ -331,6 +401,32 @@ app.put("/api/spots/:id/environment-preferences", async (req, reply) => {
     b.modelEnabled===undefined?Number(existing.model_enabled??1):(b.modelEnabled === false ? 0 : 1),
     new Date().toISOString(),
   );
+  const profileKeys = ["shorelineDirectionDeg", "castingDirectionDeg", "exposureDirectionDeg", "hasBuildingShelter", "hasCliffShelter", "openCoast", "rockAccessRequired", "slipperyAccess", "nightFishingAllowed", "lightingAvailable", "maximumWindKmh", "maximumGustKmh", "maximumWaveHeightM", "notes"];
+  if (profileKeys.some((key) => Object.hasOwn(b, key))) {
+    const merged = (key: string, column: string) => Object.hasOwn(b, key) ? b[key] : existing[column];
+    const numberOrNull = (value: unknown, minimum: number, maximum: number, reason: string) => {
+      if (value === null || value === undefined || value === "") return null;
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed) || parsed < minimum || parsed > maximum) throw new Error(`INVALID_${reason}`);
+      return parsed;
+    };
+    try {
+      const shoreline = numberOrNull(merged("shorelineDirectionDeg", "shoreline_direction_deg"), 0, 359.99, "SHORELINE_DIRECTION");
+      const casting = numberOrNull(merged("castingDirectionDeg", "casting_direction_deg"), 0, 359.99, "CASTING_DIRECTION");
+      const exposure = numberOrNull(merged("exposureDirectionDeg", "exposure_direction_deg"), 0, 359.99, "EXPOSURE_DIRECTION");
+      const maxWind = numberOrNull(merged("maximumWindKmh", "maximum_wind_kmh"), 5, 120, "MAXIMUM_WIND");
+      const maxGust = numberOrNull(merged("maximumGustKmh", "maximum_gust_kmh"), 5, 160, "MAXIMUM_GUST");
+      const maxWave = numberOrNull(merged("maximumWaveHeightM", "maximum_wave_height_m"), 0.1, 15, "MAXIMUM_WAVE");
+      const bool = (key: string, column: string) => Number(Boolean(merged(key, column)));
+      db.prepare(`UPDATE spot_environment_preferences SET shoreline_direction_deg=?,casting_direction_deg=?,exposure_direction_deg=?,has_building_shelter=?,has_cliff_shelter=?,open_coast=?,rock_access_required=?,slippery_access=?,night_fishing_allowed=?,lighting_available=?,maximum_wind_kmh=?,maximum_gust_kmh=?,maximum_wave_height_m=?,notes=? WHERE spot_id=?`).run(
+        shoreline, casting, exposure,
+        bool("hasBuildingShelter", "has_building_shelter"), bool("hasCliffShelter", "has_cliff_shelter"), bool("openCoast", "open_coast"), bool("rockAccessRequired", "rock_access_required"), bool("slipperyAccess", "slippery_access"), bool("nightFishingAllowed", "night_fishing_allowed"), bool("lightingAvailable", "lighting_available"),
+        maxWind, maxGust, maxWave, String(merged("notes", "notes") ?? "").slice(0, 2000), id,
+      );
+    } catch (error) {
+      return reply.code(400).send({ status: "invalid", reason: error instanceof Error ? error.message : "INVALID_SPOT_PROFILE", data: null });
+    }
+  }
   return { status: "saved", spotId: id, preferredTideSource: source };
 });
 app.get("/api/logs", async (request, reply) => {
@@ -358,18 +454,39 @@ app.post("/api/logs", async (req, reply) => {
       });
   const id = randomUUID(),
     now = new Date().toISOString();
+  const startedAt = new Date(String(b.startedAtUtc ?? ""));
+  const endedAt = new Date(String(b.endedAtUtc ?? ""));
+  if (Number.isNaN(startedAt.getTime()) || Number.isNaN(endedAt.getTime()) || endedAt <= startedAt || endedAt.getTime() - startedAt.getTime() > 7 * 86_400_000)
+    return reply.code(400).send({ status: "invalid", reason: "INVALID_FISHING_TIME_RANGE", data: null });
   const detailKeys = ["effectiveMinutes","blank","species","maxLengthCm","maxWeightKg","lure","waterDepth","castingDistanceM","moveCount","snagCount","tangleCount","lineBreakCount","baitLossCount","boatTraffic","crowdTraffic","weatherInterrupted"];
   const details = Object.fromEntries(detailKeys.filter((key) => b[key] !== undefined).map((key) => [key, b[key]]));
   const gearProblem = Boolean(Number(b.snagCount ?? 0) || Number(b.tangleCount ?? 0) || Number(b.lineBreakCount ?? 0) || Number(b.baitLossCount ?? 0));
   const snapshot = b.forecastSnapshotId ? db.prepare("SELECT fs.payload_json FROM forecast_snapshots fs JOIN spots s ON s.id=fs.spot_id WHERE fs.id=? AND s.owner_user_id=?").get(String(b.forecastSnapshotId), user.id) as { payload_json?: string } | undefined : undefined;
-  const comparison = { snapshotAvailable: Boolean(snapshot), actualBites: Number(b.bites ?? 0), actualCatches: Number(b.catches ?? 0), blank: Boolean(b.blank), trainingEligible: !gearProblem, reason: gearProblem ? "EQUIPMENT_ISSUES_PRESENT" : "ENVIRONMENT_RESULT_ELIGIBLE", tideSource: snapshot ? JSON.parse(String(snapshot.payload_json ?? "{}")).tides?.actualTideSourceUsed ?? null : null };
+  type SnapshotScore = { timestampUtc: string; windSpeedKmh?: number | null; windGustKmh?: number | null; score?: { safetyStatus?: string; fishingConditionScore?: number; dataConfidenceScore?: number } };
+  type SnapshotWindow = { startUtc: string; endUtc: string };
+  type SnapshotPayload = { days?: Array<{ scores?: SnapshotScore[]; windows?: SnapshotWindow[] }>; tides?: { actualTideSourceUsed?: string; comparison?: { timeDifferenceMinutes?: number } }; observation?: { selected?: { windSpeedKmh?: number | null; gustKmh?: number | null } } };
+  let snapshotPayload: SnapshotPayload | null = null;
+  try { snapshotPayload = snapshot?.payload_json ? JSON.parse(snapshot.payload_json) as SnapshotPayload : null; } catch { snapshotPayload = null; }
+  const snapshotScores = snapshotPayload?.days?.flatMap((day) => day.scores ?? []) ?? [];
+  const predicted = snapshotScores.reduce<SnapshotScore | null>((closest, item) => !closest || Math.abs(new Date(item.timestampUtc).getTime() - startedAt.getTime()) < Math.abs(new Date(closest.timestampUtc).getTime() - startedAt.getTime()) ? item : closest, null);
+  const windows = snapshotPayload?.days?.flatMap((day) => day.windows ?? []) ?? [];
+  const windowHit = windows.some((window) => new Date(window.startUtc) < endedAt && new Date(window.endUtc) > startedAt);
+  const observedWind = snapshotPayload?.observation?.selected?.windSpeedKmh ?? null;
+  const comparison = {
+    snapshotAvailable: Boolean(snapshotPayload), actualBites: Number(b.bites ?? 0), actualCatches: Number(b.catches ?? 0), blank: Boolean(b.blank), trainingEligible: !gearProblem,
+    reason: gearProblem ? "EQUIPMENT_ISSUES_PRESENT" : "ENVIRONMENT_RESULT_ELIGIBLE", windowHit, recommendedWindowCount: windows.length,
+    predictedSafetyStatus: predicted?.score?.safetyStatus ?? null, predictedFishingConditionScore: predicted?.score?.fishingConditionScore ?? null, predictedConfidenceScore: predicted?.score?.dataConfidenceScore ?? null,
+    forecastWindKmh: predicted?.windSpeedKmh ?? null, forecastGustKmh: predicted?.windGustKmh ?? null, observedWindKmh: observedWind,
+    windBiasKmh: typeof observedWind === "number" && typeof predicted?.windSpeedKmh === "number" ? Number((observedWind - predicted.windSpeedKmh).toFixed(1)) : null,
+    tideSource: snapshotPayload?.tides?.actualTideSourceUsed ?? null, tideSourceTimeDifferenceMinutes: snapshotPayload?.tides?.comparison?.timeDifferenceMinutes ?? null,
+  };
   db.prepare(
     "INSERT INTO fishing_logs (id,spot_id,forecast_snapshot_id,started_at_utc,ended_at_utc,method,bait,bites,catches,kept,rating,gear_issues,notes,created_at_utc,details_json,comparison_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
   ).run(
     id,
     spotId,
     b.forecastSnapshotId ?? null,
-    String(b.startedAtUtc), String(b.endedAtUtc), String(b.method ?? "bottom_fishing"), b.bait ?? null, Number(b.bites ?? 0), Number(b.catches ?? 0), Number(b.kept ?? 0), Number(b.rating ?? 3), b.gearIssues ?? null, b.notes ?? null,
+    startedAt.toISOString(), endedAt.toISOString(), String(b.method ?? "bottom_fishing"), b.bait ?? null, Number(b.bites ?? 0), Number(b.catches ?? 0), Number(b.kept ?? 0), Number(b.rating ?? 3), b.gearIssues ?? null, b.notes ?? null,
     now,
     JSON.stringify(details),
     JSON.stringify(comparison),
@@ -438,10 +555,7 @@ app.get("/api/system-status", async () => {
       type: "provider TTL memory cache + SQLite provider_cache table",
       staleDataIsLabelled: true,
     },
-    scheduler: {
-      status: "NOT_IMPLEMENTED",
-      detail: "Annual next-year tide check is not scheduled",
-    },
+    scheduler: officialTideYearCheckState(),
     missingEnvironmentVariables: eot20Status().modelPathConfigured
       ? []
       : ["EOT20_MODEL_PATH"],

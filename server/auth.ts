@@ -3,6 +3,7 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 
 export type AuthUser = { id: string; username: string; role: "ADMIN" | "USER" };
 export type Invitation = { id: string; createdAtUtc: string; expiresAtUtc: string | null; maxUses: number; uses: number; revokedAtUtc: string | null; createdByUsername: string };
+export type ManagedUser = AuthUser & { createdAtUtc: string; lastLoginAtUtc: string | null; disabledAtUtc: string | null; activeSessions: number };
 
 const USERNAME = /^[a-zA-Z0-9_.-]{3,32}$/;
 const PASSWORD_MIN_LENGTH = 10;
@@ -79,6 +80,43 @@ export function getSessionUser(db: Database.Database, token: string | undefined)
 
 export function deleteSession(db: Database.Database, token: string | undefined) {
   if (token) db.prepare("DELETE FROM user_sessions WHERE token_hash=?").run(hashToken(token));
+}
+
+export function changePassword(db: Database.Database, userId: string, currentPassword: unknown, newPassword: unknown) {
+  const current = String(currentPassword ?? ""), next = String(newPassword ?? "");
+  validateCredentials("password.check", next);
+  if (current === next) throw new Error("NEW_PASSWORD_MUST_DIFFER");
+  const row = db.prepare("SELECT password_hash FROM users WHERE id=? AND disabled_at_utc IS NULL").get(userId) as { password_hash: string } | undefined;
+  if (!row || !verifyPassword(current, row.password_hash)) throw new Error("CURRENT_PASSWORD_INVALID");
+  db.transaction(() => {
+    db.prepare("UPDATE users SET password_hash=? WHERE id=?").run(hashPassword(next), userId);
+    db.prepare("DELETE FROM user_sessions WHERE user_id=?").run(userId);
+  })();
+}
+
+export function listUsers(db: Database.Database): ManagedUser[] {
+  return db.prepare(`SELECT u.id,u.username,u.role,u.created_at_utc AS createdAtUtc,u.last_login_at_utc AS lastLoginAtUtc,u.disabled_at_utc AS disabledAtUtc,COUNT(s.id) AS activeSessions
+    FROM users u LEFT JOIN user_sessions s ON s.user_id=u.id AND s.expires_at_utc>?
+    GROUP BY u.id ORDER BY u.created_at_utc`).all(now()) as ManagedUser[];
+}
+
+export function setUserDisabled(db: Database.Database, actorUserId: string, targetUserId: string, disabled: boolean) {
+  if (actorUserId === targetUserId) throw new Error("ADMIN_CANNOT_DISABLE_SELF");
+  const target = db.prepare("SELECT role,disabled_at_utc FROM users WHERE id=?").get(targetUserId) as { role: AuthUser["role"]; disabled_at_utc: string | null } | undefined;
+  if (!target) throw new Error("USER_NOT_FOUND");
+  if (disabled && target.role === "ADMIN" && !target.disabled_at_utc) {
+    const activeAdmins = (db.prepare("SELECT COUNT(*) AS count FROM users WHERE role='ADMIN' AND disabled_at_utc IS NULL").get() as { count: number }).count;
+    if (activeAdmins <= 1) throw new Error("LAST_ADMIN_CANNOT_BE_DISABLED");
+  }
+  db.transaction(() => {
+    db.prepare("UPDATE users SET disabled_at_utc=? WHERE id=?").run(disabled ? now() : null, targetUserId);
+    if (disabled) db.prepare("DELETE FROM user_sessions WHERE user_id=?").run(targetUserId);
+  })();
+}
+
+export function revokeUserSessions(db: Database.Database, targetUserId: string) {
+  if (!db.prepare("SELECT 1 FROM users WHERE id=?").get(targetUserId)) throw new Error("USER_NOT_FOUND");
+  return db.prepare("DELETE FROM user_sessions WHERE user_id=?").run(targetUserId).changes;
 }
 
 export function createInvitation(db: Database.Database, adminId: string, input: { maxUses?: unknown; expiresAtUtc?: unknown }) {

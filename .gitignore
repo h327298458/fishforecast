@@ -7,6 +7,8 @@ data/eot20-cache/
 data/eot20-test-cache/
 data/*.log
 .env
+.env.server
+.env.local
 .venv-eot20/
 playwright-report/
 test-results/

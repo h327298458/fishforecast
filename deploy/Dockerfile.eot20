@@ -1,0 +1,45 @@
+FROM node:24-bookworm-slim AS web-build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --include=dev
+COPY . .
+RUN npm run build
+
+FROM node:24-bookworm-slim AS runtime
+WORKDIR /app
+
+# Python is intentionally installed in the image while the 2.3 GB EOT20
+# constituent files stay outside it and are mounted read-only at /models.
+# 0.10.4 is the version already validated by this repository's real-model tests.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 python3-venv libgomp1 ca-certificates \
+  && python3 -m venv /opt/eot20-venv \
+  && /opt/eot20-venv/bin/pip install --no-cache-dir --upgrade pip \
+  && /opt/eot20-venv/bin/pip install --no-cache-dir "eo-tides==0.10.4" \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
+ENV NODE_ENV=production \
+    PORT=8787 \
+    DATABASE_PATH=/app/data/tideline.db \
+    EOT20_MODEL_PATH=/models \
+    EO_TIDES_TIDE_MODELS=/models \
+    EOT20_CACHE_PATH=/app/data/tide-model-cache \
+    EOT20_PYTHON=/opt/eot20-venv/bin/python \
+    NODE_OPTIONS=--max-old-space-size=256
+
+COPY package*.json ./
+RUN npm ci --include=dev --omit=optional \
+  && npm cache clean --force
+COPY --from=web-build /app/dist ./dist
+COPY --from=web-build /app/server ./server
+COPY --from=web-build /app/scripts ./scripts
+COPY --from=web-build /app/tsconfig.node.json ./
+RUN mkdir -p /app/data/tide-model-cache \
+  && chown -R node:node /app/data
+
+USER node
+EXPOSE 8787
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:8787/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+CMD ["node", "--import", "tsx", "server/index.ts"]

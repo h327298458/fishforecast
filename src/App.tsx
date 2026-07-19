@@ -18,6 +18,7 @@ import {
   getCurrentUser,
   getForecast,
   getLogs,
+  getSpotComparisons,
   getSpots,
   logout,
   reverseLocation,
@@ -30,6 +31,7 @@ import type {
   Forecast,
   LocationPoint,
   SavedSpot,
+  SpotComparison,
   TideSource,
   Window,
 } from "./types";
@@ -42,9 +44,12 @@ import { SystemStatusPage } from "./components/SystemStatusPage";
 import { EnvironmentEvidence } from "./components/EnvironmentEvidence";
 import { AuthPage } from "./components/AuthPage";
 import { InvitationManager } from "./components/InvitationManager";
+import { AccountSecurity } from "./components/AccountSecurity";
+import { SpotSafetySettings } from "./components/SpotSafetySettings";
+import { SpotComparisonTable } from "./components/SpotComparisonTable";
 import "./styles.css";
 
-type View = "forecast" | "logs" | "analytics" | "settings";
+type View = "forecast" | "compare" | "logs" | "analytics" | "settings";
 export default function App() {
   if (window.location.pathname === "/system-status")
     return <SystemStatusPage />;
@@ -72,6 +77,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
     [accuracy, setAccuracy] = useState<number | null>(null),
     [view, setView] = useState<View>("forecast"),
     [logs, setLogs] = useState<FishingLog[]>([]),
+    [comparisons, setComparisons] = useState<SpotComparison[]>([]),
     [analytics, setAnalytics] = useState<Record<
       string,
       number | boolean
@@ -189,6 +195,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
       setPoint(stored);
       const items = await getSpots();
       setSaved(items);
+      await load(stored, spotType, method, tideSource);
       setToast("钓点已保存为私有收藏");
     } catch (e) {
       setToast(e instanceof Error ? e.message : "保存失败");
@@ -224,11 +231,32 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
       setToast(e instanceof Error ? e.message : "参考港设置保存失败");
     }
   }
+  async function saveSpotSafetySettings(options: Record<string, unknown>) {
+    if (!point || !saved.some((item) => item.id === point.id)) {
+      setToast("请先保存钓点，再设置现场安全属性");
+      return;
+    }
+    try {
+      await saveEnvironmentPreferences(point.id, tideSource, options);
+      const items = await getSpots();
+      setSaved(items);
+      const updated = items.find((item) => item.id === point.id) ?? point;
+      setPoint(updated);
+      await load(updated, spotType, method, tideSource);
+      setToast("钓点属性已保存，并已重新计算评分");
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : "钓点属性保存失败");
+    }
+  }
   async function showView(next: View) {
     setView(next);
     if (next === "logs")
       getLogs()
         .then(setLogs)
+        .catch((e) => setError(String(e)));
+    if (next === "compare")
+      getSpotComparisons()
+        .then(setComparisons)
         .catch((e) => setError(String(e)));
     if (next === "analytics")
       getAnalytics()
@@ -279,6 +307,10 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
             <BookOpen />
             钓鱼日志
           </button>
+          <button onClick={() => void showView("compare")}>
+            <BarChart3 />
+            钓点比较
+          </button>
           <button onClick={() => void showView("analytics")}>
             <BarChart3 />
             数据分析
@@ -309,6 +341,8 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
         <section className="workspace">
           {view === "logs" ? (
             <LogsView logs={logs} />
+          ) : view === "compare" ? (
+            <SpotComparisonTable rows={comparisons} />
           ) : view === "analytics" ? (
             <AnalyticsView data={analytics} />
           ) : view === "settings" ? (
@@ -485,6 +519,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
                   onOfficialSettings={(options) => void saveOfficialSettings(options)}
                 />
               </details>
+              <SpotSafetySettings key={point.id} spot={point as SavedSpot} saved={isSaved} onSave={saveSpotSafetySettings} />
             </>
           ) : (
             <div className="empty-workspace">
@@ -556,7 +591,7 @@ function LogsView({ logs }: { logs: FishingLog[] }) {
               {log.rating}/4
             </span>
             {log.notes ? <p>{log.notes}</p> : null}
-            {log.comparisonJson ? <LogComparison value={log.comparisonJson} /> : null}
+            {log.comparisonJson ? <DetailedLogComparison value={log.comparisonJson} /> : null}
           </article>
         ))
       ) : (
@@ -573,6 +608,21 @@ function LogComparison({ value }: { value: string }) {
   } catch { /* Invalid legacy comparison data is rendered below. */ }
   if (!comparison) return <small>历史比较数据格式无效</small>;
   return <small>预测快照 {comparison.snapshotAvailable ? "已关联" : "缺失"} · 潮汐源 {comparison.tideSource ?? "—"} · {comparison.trainingEligible ? "可作为环境样本" : `不作为纯环境样本：${comparison.reason ?? "未说明"}`}</small>;
+}
+function DetailedLogComparison({ value }: { value: string }) {
+  void LogComparison;
+  type Comparison = { snapshotAvailable?: boolean; trainingEligible?: boolean; reason?: string; tideSource?: string; windowHit?: boolean; predictedSafetyStatus?: string | null; predictedFishingConditionScore?: number | null; predictedConfidenceScore?: number | null; forecastWindKmh?: number | null; observedWindKmh?: number | null; windBiasKmh?: number | null };
+  let comparison: Comparison | null = null;
+  try { comparison = JSON.parse(value) as Comparison; } catch { return <small>历史比较数据格式无效</small>; }
+  return <div className="log-comparison">
+    <b>预测与实际</b>
+    <span>预测快照：{comparison.snapshotAvailable ? "已关联" : "缺失"}</span>
+    <span>推荐窗口：{comparison.windowHit ? "实际出钓与窗口重叠" : "未命中或无窗口"}</span>
+    <span>出钓时预测：安全 {comparison.predictedSafetyStatus ?? "—"} · 环境 {comparison.predictedFishingConditionScore ?? "—"} · 可信度 {comparison.predictedConfidenceScore ?? "—"}</span>
+    <span>风速：预报 {comparison.forecastWindKmh ?? "—"} / BOM快照实测 {comparison.observedWindKmh ?? "—"} km/h{comparison.windBiasKmh == null ? "" : `（偏差 ${comparison.windBiasKmh > 0 ? "+" : ""}${comparison.windBiasKmh}）`}</span>
+    <span>潮汐源：{comparison.tideSource ?? "—"}</span>
+    <span>{comparison.trainingEligible ? "可作为环境结果样本" : `存在装备问题，不作为纯环境样本（${comparison.reason ?? "未说明"}）`}</span>
+  </div>;
 }
 function AnalyticsView({
   data,
@@ -618,6 +668,7 @@ function SettingsView({ user }: { user: AuthUser }) {
       <a className="status-link" href="/system-status">
         打开 Provider 与降级状态审计页 →
       </a>
+      <AccountSecurity user={user} />
       {user.role === "ADMIN" ? <InvitationManager /> : null}
     </div>
   );

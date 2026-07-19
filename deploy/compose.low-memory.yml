@@ -1,0 +1,6 @@
+services:
+  app:
+    environment:
+      NODE_OPTIONS: --max-old-space-size=192
+    mem_limit: 820m
+    cpus: 1.5

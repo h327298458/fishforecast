@@ -1,0 +1,38 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.eot20
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${PUBLIC_PORT:-8000}:8787"
+    environment:
+      PORT: 8787
+      DATABASE_PATH: /app/data/tideline.db
+      PHOTON_BASE_URL: ${PHOTON_BASE_URL:-https://photon.komoot.io}
+      GEOCODING_USER_AGENT: ${GEOCODING_USER_AGENT:-TideLine/0.1}
+      EOT20_MODEL_PATH: /models
+      EO_TIDES_TIDE_MODELS: /models
+      EOT20_MODEL_VERSION: ${EOT20_MODEL_VERSION:-EOT20-85762}
+      EOT20_CACHE_PATH: /app/data/tide-model-cache
+      EOT20_PYTHON: /opt/eot20-venv/bin/python
+      INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-admin}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:?Set INITIAL_ADMIN_PASSWORD in .env.server before first start}
+      SESSION_DAYS: ${SESSION_DAYS:-7}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-}
+      NODE_OPTIONS: --max-old-space-size=256
+    volumes:
+      - tideline-data:/app/data
+      - ${EOT20_MODEL_PATH:-../data/tide-models}:/models:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 900m
+    cpus: 1.75
+
+volumes:
+  tideline-data:

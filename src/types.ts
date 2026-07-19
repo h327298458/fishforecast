@@ -17,6 +17,20 @@ export type SavedSpot = LocationPoint & {
   targetSpecies?: string | null;
   createdAtUtc?: string;
   preferredTideSource?: TideSource;
+  shorelineDirectionDeg?: number | null;
+  castingDirectionDeg?: number | null;
+  exposureDirectionDeg?: number | null;
+  hasBuildingShelter?: number | boolean | null;
+  hasCliffShelter?: number | boolean | null;
+  openCoast?: number | boolean | null;
+  rockAccessRequired?: number | boolean | null;
+  slipperyAccess?: number | boolean | null;
+  nightFishingAllowed?: number | boolean | null;
+  lightingAvailable?: number | boolean | null;
+  maximumWindKmh?: number | null;
+  maximumGustKmh?: number | null;
+  maximumWaveHeightM?: number | null;
+  notes?: string | null;
 };
 export type Score = {
   safetyStatus: SafetyStatus;
@@ -49,6 +63,22 @@ export type Hour = {
   score: Score;
 };
 export type Window = { startUtc: string; endUtc: string; averageScore: number };
+export type SpotComparison = {
+  spotId: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  status: "AVAILABLE" | "NO_SNAPSHOT" | "INVALID_SNAPSHOT";
+  generatedAtUtc?: string;
+  bestWindow?: Window | null;
+  safetyStatus?: SafetyStatus;
+  safetyScore?: number | null;
+  comfortScore?: number | null;
+  fishingConditionScore?: number | null;
+  confidenceScore?: number | null;
+  observedWindKmh?: number | null;
+  tideSource?: TideSource;
+};
 export type Day = { date: string; hours: Hour[]; windows: Window[] };
 export type ProviderState = {
   status:
@@ -192,6 +222,11 @@ export type Forecast = {
     usingStaleCache?: boolean;
     limitation?: string;
     detail?: string;
+  };
+  regulations: {
+    state: string; authority: string; rulesUrl: string; licenceUrl: string | null;
+    marineParksUrl: string | null; lastVerifiedAt: string;
+    status: "REAL" | "NOT_APPLICABLE"; notice: string;
   };
   marineApplicability: {
     status: string;

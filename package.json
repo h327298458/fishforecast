@@ -20,6 +20,7 @@
     "tides:nsw:download": "powershell -ExecutionPolicy Bypass -File scripts/download-bom-nsw-tides.ps1",
     "tides:nsw:import": "tsx scripts/import-bom-nsw-tides.ts",
     "test:nsw-tides": "vitest run --config vitest.nsw-tides.config.ts"
+    ,"test:e2e": "npm run build && node scripts/e2e-smoke.mjs"
     ,"tides:compare:validate": "tsx scripts/validate-double-tides.ts"
     ,"observations:bom:validate": "tsx scripts/validate-bom-observations.ts"
   },

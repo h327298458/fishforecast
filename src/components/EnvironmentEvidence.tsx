@@ -308,6 +308,10 @@ export function EnvironmentEvidence({
           </>
         ) : <p className="unavailable">{forecast.waterData.limitation ?? forecast.waterData.detail ?? "水文状态不可用"}</p>}
       </section>
+      <section className="evidence-card regulation-card">
+        <h3>官方休闲钓鱼规则</h3>
+        {forecast.regulations.status === "REAL" ? <><p>{forecast.regulations.authority} · 最后核验 {forecast.regulations.lastVerifiedAt}</p><div className="regulation-links"><a href={forecast.regulations.rulesUrl} target="_blank" rel="noreferrer">规则、尺寸、袋限和禁渔期</a>{forecast.regulations.licenceUrl ? <a href={forecast.regulations.licenceUrl} target="_blank" rel="noreferrer">Fishing licence</a> : null}{forecast.regulations.marineParksUrl ? <a href={forecast.regulations.marineParksUrl} target="_blank" rel="noreferrer">Marine parks / sanctuary zones</a> : null}</div><small>{forecast.regulations.notice} 系统不声明该地点一定允许垂钓。</small></> : <p className="unavailable">{forecast.regulations.notice}</p>}
+      </section>
     </div>
   );
 }
