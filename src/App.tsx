@@ -32,6 +32,7 @@ import type { AuthUser } from "./api";
 import type {
   FishingLog,
   Forecast,
+  Hour,
   LocationPoint,
   SavedSpot,
   SpotComparison,
@@ -56,6 +57,17 @@ import { createForecastProgress, updateForecastProgress, type ForecastProgress, 
 import "./styles.css";
 
 type View = "forecast" | "compare" | "logs" | "analytics" | "settings";
+function selectBestHour(day: Forecast["days"][number] | undefined, generatedAtUtc: string | undefined): Hour | undefined {
+  const generatedAt = new Date(generatedAtUtc ?? 0).getTime();
+  const actionable = day?.hours.filter((hour) => new Date(hour.timestampUtc).getTime() >= generatedAt - 3_600_000);
+  const candidates = actionable?.length ? actionable : day?.hours;
+  if (!candidates?.length) return undefined;
+  let best = candidates[0];
+  for (let index = 1; index < candidates.length; index += 1) {
+    if (candidates[index].score.fishingConditionScore >= best.score.fishingConditionScore) best = candidates[index];
+  }
+  return best;
+}
 export default function App() {
   if (window.location.pathname === "/system-status")
     return <SystemStatusPage />;
@@ -72,6 +84,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
   const [point, setPoint] = useState<LocationPoint | null>(null),
     [saved, setSaved] = useState<SavedSpot[]>([]),
     [forecast, setForecast] = useState<Forecast | null>(null),
+    [baselineForecast, setBaselineForecast] = useState<Forecast | null>(null),
     [day, setDay] = useState(0),
     [spotType, setSpotType] = useState("wharf"),
     [method, setMethod] = useState("bottom_fishing"),
@@ -106,6 +119,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
       const requestId = ++loadSequence.current;
       setLoading(true);
       setForecast(null);
+      setBaselineForecast(null);
       setError("");
       setDay(0);
       setProgress(createForecastProgress(requestId));
@@ -120,15 +134,17 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
           { id: "official", status: "completed", detail: officialAvailable ? `已匹配 ${baseForecast.tides.official?.station.name ?? "官方参考港"}` : "当前时段没有匹配到可用的官方潮汐事件" },
         ]);
         if (baseForecast.tides.calculationStatus !== "PENDING") {
+          setBaselineForecast(null);
           updateProgress(requestId, [
             { id: "eot20", status: "completed", detail: baseForecast.tides.actualTideSourceUsed === "EOT20_MODEL" ? "模型结果已从缓存或本次请求取得" : "当前评分来源不需要运行 EOT20" },
             { id: "scoring", status: "completed", detail: "评分、图表和推荐窗口已完成" },
           ]);
           return;
         }
+        setBaselineForecast(baseForecast);
         updateProgress(requestId, [
           { id: "eot20", status: "running", detail: "正在加载本地 NetCDF 模型并计算 7 天潮位" },
-          { id: "scoring", status: "pending", detail: "EOT20 完成后自动重算，不需要再次点击" },
+          { id: "scoring", status: "pending", detail: "当前仅显示未计潮汐的临时评分；EOT20 完成后自动重算" },
         ]);
         try {
           const model = await getEot20Tide(target, type, baseForecast.tides.model.request);
@@ -344,24 +360,14 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
     void resolveCoordinate(latitude, longitude);
   }
   const current = forecast?.days[day],
-    best = useMemo(
-      () => {
-        const generatedAt = new Date(forecast?.generatedAtUtc ?? 0).getTime();
-        const actionable = current?.hours.filter(
-          (hour) =>
-            new Date(hour.timestampUtc).getTime() >= generatedAt - 3_600_000,
-        );
-        const candidates = actionable?.length ? actionable : current?.hours;
-        return candidates?.reduce(
-          (a, b) =>
-            a.score.fishingConditionScore > b.score.fishingConditionScore
-              ? a
-              : b,
-          candidates[0],
-        );
-      },
-      [current, forecast?.generatedAtUtc],
-    );
+    best = useMemo(() => selectBestHour(current, forecast?.generatedAtUtc), [current, forecast?.generatedAtUtc]);
+  const baselineCurrent = current
+    ? baselineForecast?.days.find((candidate) => candidate.date === current.date)
+    : undefined;
+  const baselineBest = useMemo(
+    () => selectBestHour(baselineCurrent, baselineForecast?.generatedAtUtc),
+    [baselineCurrent, baselineForecast?.generatedAtUtc],
+  );
   const tideChartHours =
     forecast?.tides.actualTideSourceUsed === "EOT20_MODEL" &&
     forecast.tides.model.values?.length &&
@@ -375,7 +381,9 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
           }))
       : current?.hours;
   const isSaved = Boolean(point && saved.some((item) => item.id === point.id));
-  const tideCalculationPending = forecast?.tides.calculationStatus === "PENDING";
+  const tideCalculationFailed = progress?.stages.some((stage) => stage.id === "eot20" && stage.status === "error") ?? false;
+  const tideCalculationPending = forecast?.tides.calculationStatus === "PENDING" && !tideCalculationFailed;
+  const tideScoreDegraded = tideCalculationFailed || (!tideCalculationPending && forecast?.tides.actualTideSourceUsed === "NO_TIDE");
   return (
     <div className="app">
       <header>
@@ -529,13 +537,21 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
                     : "BOM 警告无法获取，安全状态不得显示为安全。"}
                 </span>
               </div>
-              <MetricRow score={best.score} />
+              <MetricRow score={best.score} preliminary={tideCalculationPending} />
+              <TideScoreExplanation
+                hour={best}
+                baselineBest={baselineBest}
+                timezone={point.timezone}
+                pending={tideCalculationPending}
+                preferredSource={forecast.tides.preferredSource}
+                actualSource={forecast.tides.actualTideSourceUsed}
+              />
               {best.score.confidenceReasons.length ? (
                 <p className="confidence-reasons">
                   <b>数据可信度依据：</b>{best.score.confidenceReasons.join("；")}
                 </p>
               ) : null}
-              <RecommendedWindows windows={current.windows} timezone={point.timezone} />
+              <RecommendedWindows windows={current.windows} timezone={point.timezone} preliminary={tideCalculationPending} degraded={tideScoreDegraded} />
               <TideSourceControl
                 forecast={forecast}
                 busy={tideCalculationPending}
@@ -563,10 +579,15 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
                 ))}
               </div>
               <WindChart hours={current.hours} />
-              {tideCalculationPending ? (
+              {tideCalculationFailed ? (
+                <div className="tide-calculation-placeholder is-error" role="status">
+                  <ShieldAlert />
+                  <span><b>EOT20 潮汐计算失败</b><small>当前只保留不含潮汐的降级评分和时段；系统没有使用假潮位。</small></span>
+                </div>
+              ) : tideCalculationPending ? (
                 <div className="tide-calculation-placeholder" role="status">
                   <LoaderCircle className="spin" />
-                  <span><b>EOT20 潮汐正在后台计算</b><small>风、天气和当前可用窗口已先展示；完成后这里会自动替换为真实潮汐曲线并重算窗口。</small></span>
+                  <span><b>EOT20 潮汐正在后台计算</b><small>风、天气和临时时段已先展示，但当前鱼口分尚未计入潮汐；完成后会自动替换为最终评分和窗口。</small></span>
                 </div>
               ) : (
                 <TideChart hours={tideChartHours ?? current.hours} windows={current.windows} timezone={point.timezone} />
@@ -685,6 +706,76 @@ function RemoveSpotDialog({ spot, onCancel, onConfirm }: { spot: SavedSpot; onCa
     </div>
   );
 }
+function TideScoreExplanation({
+  hour,
+  baselineBest,
+  timezone,
+  pending,
+  preferredSource,
+  actualSource,
+}: {
+  hour: Hour;
+  baselineBest?: Hour;
+  timezone: string;
+  pending: boolean;
+  preferredSource: TideSource;
+  actualSource: TideSource;
+}) {
+  const formatTime = (value: string) => new Intl.DateTimeFormat("zh-CN", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+  if (pending) {
+    return (
+      <section className="tide-score-explanation is-pending" role="status">
+        <strong>当前是未计潮汐的临时环境评分：{hour.score.fishingConditionScore}</strong>
+        <span>EOT20 完成前只使用风、气压和日照；该数值及临时时段都不是最终鱼口结论。</span>
+      </section>
+    );
+  }
+  if (hour.score.scoreStatus !== "FINAL_WITH_TIDE" || actualSource === "NO_TIDE") {
+    return (
+      <section className="tide-score-explanation is-degraded">
+        <strong>{preferredSource === "NO_TIDE" ? "本次按设置不计潮汐" : "本次为无潮汐降级评分"}</strong>
+        <span>当前分数只由风、气压和日照计算；系统没有用假潮汐补齐。</span>
+      </section>
+    );
+  }
+  const delta = hour.score.tideContributionPoints ?? 0;
+  const deltaLabel = `${delta > 0 ? "+" : ""}${delta}`;
+  const phaseLabel = hour.tidePhase === "rising" ? "涨潮" : hour.tidePhase === "falling" ? "退潮" : "转潮附近";
+  const nextEventLabel = hour.nextTideEventType === "HIGH" ? "高潮" : hour.nextTideEventType === "LOW" ? "低潮" : null;
+  const minutes = hour.minutesToNextTideEvent;
+  const durationLabel = minutes === null || minutes === undefined
+    ? null
+    : minutes < 60
+      ? `${minutes} 分钟`
+      : `${Math.floor(minutes / 60)} 小时${minutes % 60 ? ` ${minutes % 60} 分` : ""}`;
+  const bestTimeChanged = baselineBest && baselineBest.timestampUtc !== hour.timestampUtc;
+  return (
+    <section className="tide-score-explanation is-final" aria-label="潮汐对鱼口评分的影响">
+      <div className="tide-score-flow">
+        <span>未计潮汐 <b>{hour.score.baselineFishingConditionScore}</b></span>
+        <span className={delta > 0 ? "positive-delta" : delta < 0 ? "negative-delta" : "neutral-delta"}>潮汐贡献 <b>{deltaLabel}</b></span>
+        <span>最终鱼口评分 <b>{hour.score.fishingConditionScore}</b></span>
+      </div>
+      <small>
+        {actualSource === "EOT20_MODEL" ? "EOT20 模型" : "官方参考港"} · {phaseLabel}
+        {hour.tideChangeRateMPerHour !== null && hour.tideChangeRateMPerHour !== undefined
+          ? ` · 变化速度 ${hour.tideChangeRateMPerHour > 0 ? "+" : ""}${hour.tideChangeRateMPerHour.toFixed(2)} m/h`
+          : ""}
+        {nextEventLabel && durationLabel ? ` · 距下一${nextEventLabel} ${durationLabel}` : ""}
+      </small>
+      {bestTimeChanged ? (
+        <small className="best-time-change">计入潮汐后，当天最佳小时由 {formatTime(baselineBest.timestampUtc)} 调整为 {formatTime(hour.timestampUtc)}。</small>
+      ) : (
+        <small className="best-time-change">计入潮汐后，当天最佳小时仍为 {formatTime(hour.timestampUtc)}。</small>
+      )}
+    </section>
+  );
+}
 function ProviderStrip({ status }: { status: Forecast["providerStatus"] }) {
   return (
     <div className="provider-strip">
@@ -697,13 +788,13 @@ function ProviderStrip({ status }: { status: Forecast["providerStatus"] }) {
     </div>
   );
 }
-function RecommendedWindows({ windows, timezone }: { windows: Window[]; timezone: string }) {
+function RecommendedWindows({ windows, timezone, preliminary = false, degraded = false }: { windows: Window[]; timezone: string; preliminary?: boolean; degraded?: boolean }) {
   const format = (value: string) => new Intl.DateTimeFormat("zh-CN", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
   return (
-    <section className="recommended-windows">
+    <section className={`recommended-windows${preliminary ? " is-preliminary" : degraded ? " is-degraded" : ""}`}>
       <div>
-        <h2>推荐出钓窗口</h2>
-        <small>先以安全状态 SAFE 硬筛选，再要求环境条件 ≥72、可信度 ≥55，并在连续 2–4 小时中综合鱼口环境、舒适度、安全分和可信度选择最协调的片段。</small>
+        <h2>{preliminary ? "临时可用时段（待潮汐确认）" : degraded ? "无潮汐降级时段" : "推荐出钓窗口"}</h2>
+        <small>{preliminary ? "这些时段尚未计入潮汐，只用于先查看天气条件；EOT20 完成后可能调整或取消。" : degraded ? "当前没有可用潮汐源，时段只根据风、气压、日照、安全与可信度生成，不等同完整推荐。" : "先以安全状态 SAFE 硬筛选，再要求环境条件 ≥72、可信度 ≥55，并在连续 2–4 小时中综合鱼口环境、舒适度、安全分和可信度选择最协调的片段。"}</small>
       </div>
       {windows.length ? (
         <div className="window-list">
@@ -711,10 +802,10 @@ function RecommendedWindows({ windows, timezone }: { windows: Window[]; timezone
             <article key={window.startUtc} className={`window-${window.rating.toLowerCase()}`}>
               <div className="window-title">
                 <b>{format(window.startUtc)}–{format(window.endUtc)}</b>
-                <em>{window.ratingLabel}</em>
+                <em>{preliminary ? "待潮汐确认" : degraded ? "未计潮汐" : window.ratingLabel}</em>
               </div>
               <span>{window.durationHours} 小时 · 环境 {window.averageScore} · 舒适 {window.averageComfortScore} · 可信度 {window.averageConfidenceScore}</span>
-              <p>{window.summary}</p>
+              <p>{preliminary ? "仅为天气与基础环境形成的临时时段，不应在潮汐完成前作为最终出钓建议。" : degraded ? "这是无潮汐数据下的降级时段，请结合现场水流和高低潮信息判断。" : window.summary}</p>
               {window.reasons.length ? <small className="window-reason">依据：{window.reasons.join("；")}</small> : null}
               {window.cautions.length ? <small className="window-caution">注意：{window.cautions.join("；")}</small> : null}
             </article>

@@ -1,6 +1,6 @@
 import type { HourlyEnvironment, ScoreResult, SafetyStatus } from "./types.js";
 
-export const RULE_VERSION = "2026.07-trust.4";
+export const RULE_VERSION = "2026.07-tide-explain.5";
 const clamp = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
 export const angularDifference = (a: number, b: number) => Math.abs(((a - b + 540) % 360) - 180);
 export const weightedScore = (items: Array<{ value: number | null; weight: number }>) => {
@@ -9,6 +9,34 @@ export const weightedScore = (items: Array<{ value: number | null; weight: numbe
   return weight ? usable.reduce((sum, item) => sum + item.value * item.weight, 0) / weight : 0;
 };
 const inverseLinear = (value: number | null, ideal: number, bad: number) => value === null ? null : clamp(100 - Math.max(0, value - ideal) * (100 / Math.max(bad - ideal, 1)));
+
+export function scoreTideCondition(env: HourlyEnvironment) {
+  if (env.tidePhase === null) return null;
+  const phaseScore = env.tidePhase === "rising" ? 82 : env.tidePhase === "falling" ? 72 : 55;
+  const rate = env.tideChangeRateMPerHour;
+  const movementScore = rate === null || rate === undefined
+    ? null
+    : clamp(50 + Math.min(Math.abs(rate), 0.5) * 90);
+  const minutes = env.minutesToNearestTideEvent;
+  const timingScore = minutes === null || minutes === undefined
+    ? null
+    : minutes <= 30
+      ? 52
+      : minutes <= 120
+        ? 78
+        : minutes <= 240
+          ? 68
+          : 60;
+  const score = clamp(weightedScore([
+    { value: phaseScore, weight: 0.55 },
+    { value: movementScore, weight: 0.25 },
+    { value: timingScore, weight: 0.2 },
+  ]));
+  const phaseLabel = env.tidePhase === "rising" ? "涨潮" : env.tidePhase === "falling" ? "退潮" : "转潮附近";
+  const movementLabel = rate === null || rate === undefined ? "变化速度未知" : `变化 ${Math.abs(rate).toFixed(2)} m/h`;
+  const timingLabel = minutes === null || minutes === undefined ? "高低潮时间未知" : `距最近高低潮约 ${Math.round(minutes)} 分钟`;
+  return { score, reason: `${phaseLabel}；${movementLabel}；${timingLabel}` };
+}
 
 export type SpotSafetyProfile = {
   exposureDirectionDeg?: number | null;
@@ -49,15 +77,44 @@ export function scoreHour(env: HourlyEnvironment, spotType = "wharf", profile: S
     { value: inverseLinear(env.precipitationProbabilityPercent, 15, 90), weight: 0.25 },
     { value: env.apparentTemperatureC === null ? null : clamp(100 - Math.abs(env.apparentTemperatureC - 20) * 6), weight: 0.35 },
   ]);
-  const fishingConditionScore = weightedScore([
+  const baselineFishingConditionScore = clamp(weightedScore([
     { value: inverseLinear(evaluatedWind, 8, 40), weight: 0.25 },
     { value: env.pressureHpa === null ? null : clamp(75 - Math.abs(env.pressureHpa - 1016) * 2), weight: 0.2 },
-    { value: env.tidePhase === null ? null : env.tidePhase === "rising" ? 86 : env.tidePhase === "falling" ? 72 : 55, weight: 0.35 },
     { value: env.daylightState === "day" ? 72 : 60, weight: 0.2 },
-  ]);
+  ]));
+  const tideCondition = scoreTideCondition(env);
+  const fishingConditionScore = tideCondition
+    ? clamp(weightedScore([
+        { value: inverseLinear(evaluatedWind, 8, 40), weight: 0.25 },
+        { value: env.pressureHpa === null ? null : clamp(75 - Math.abs(env.pressureHpa - 1016) * 2), weight: 0.2 },
+        { value: tideCondition.score, weight: 0.35 },
+        { value: env.daylightState === "day" ? 72 : 60, weight: 0.2 },
+      ]))
+    : baselineFishingConditionScore;
+  const scoreStatus: ScoreResult["scoreStatus"] = tideCondition
+    ? "FINAL_WITH_TIDE"
+    : tideIsPending
+      ? "PRELIMINARY_NO_TIDE"
+      : "FINAL_NO_TIDE";
   const positives = [env.tidePhase === "rising" ? "潮位处于上升阶段" : "", (evaluatedWind ?? 99) < 20 ? "平均风速较温和" : "", exposureMultiplier < 1 ? "钓点对当前风向有遮挡" : "", (env.pressureHpa ?? 0) >= 1012 ? "气压处于稳定区间" : ""].filter(Boolean);
   const negatives = [(evaluatedGust ?? 0) > 30 ? "阵风可能影响抛投与舒适度" : "", exposureMultiplier > 1 ? "当前风向正对钓点暴露方向" : "", env.warningSeverity === "unknown" ? "官方警告状态暂时无法核实" : "", missing.length ? `缺少 ${missing.join("、")} 数据` : ""].filter(Boolean);
-  return { safetyStatus, safetyScore: clamp(safetyScore), comfortScore: clamp(comfortScore), fishingConditionScore: clamp(fishingConditionScore), dataConfidenceScore: clamp(env.dataQuality.overall * 100), confidenceReasons: env.dataQuality.reasons ?? [], positives, negatives, missing, ruleVersion: RULE_VERSION };
+  return {
+    safetyStatus,
+    safetyScore: clamp(safetyScore),
+    comfortScore: clamp(comfortScore),
+    fishingConditionScore,
+    baselineFishingConditionScore,
+    tideConditionScore: tideCondition?.score ?? null,
+    tideContributionPoints: tideCondition ? fishingConditionScore - baselineFishingConditionScore : null,
+    tideScoreReason: tideCondition?.reason ?? null,
+    scoreStatus,
+    dataConfidenceScore: clamp(env.dataQuality.overall * 100),
+    confidenceReasons: env.dataQuality.reasons ?? [],
+    positives,
+    negatives,
+    missing,
+    ruleVersion: RULE_VERSION,
+  };
 }
 
 export type FishingWindow = {

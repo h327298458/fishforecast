@@ -11,6 +11,11 @@ export type HourlyEnvironment = {
   modelSeaLevelTrendM: number | null;
   tideHeightM: number | null; tidePhase: 'rising'|'falling'|'slack'|null;
   tideDataStatus?: 'AVAILABLE'|'PENDING'|'UNAVAILABLE'|'NOT_APPLICABLE';
+  tideChangeRateMPerHour?: number | null;
+  minutesToNearestTideEvent?: number | null;
+  nearestTideEventType?: 'HIGH'|'LOW'|null;
+  minutesToNextTideEvent?: number | null;
+  nextTideEventType?: 'HIGH'|'LOW'|null;
   warningSeverity: 'none'|'minor'|'moderate'|'severe'|'unknown'; daylightState: 'day'|'night';
   sources: Record<string,string>; fetchedAtUtc: string;
   dataQuality: {
@@ -20,4 +25,20 @@ export type HourlyEnvironment = {
     reasons?: string[];
   };
 };
-export type ScoreResult = { safetyStatus: SafetyStatus; safetyScore: number; comfortScore: number; fishingConditionScore: number; dataConfidenceScore: number; confidenceReasons: string[]; positives: string[]; negatives: string[]; missing: string[]; ruleVersion: string };
+export type ScoreResult = {
+  safetyStatus: SafetyStatus;
+  safetyScore: number;
+  comfortScore: number;
+  fishingConditionScore: number;
+  baselineFishingConditionScore: number;
+  tideConditionScore: number | null;
+  tideContributionPoints: number | null;
+  tideScoreReason: string | null;
+  scoreStatus: 'PRELIMINARY_NO_TIDE'|'FINAL_WITH_TIDE'|'FINAL_NO_TIDE';
+  dataConfidenceScore: number;
+  confidenceReasons: string[];
+  positives: string[];
+  negatives: string[];
+  missing: string[];
+  ruleVersion: string;
+};

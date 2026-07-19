@@ -37,6 +37,11 @@ export type Score = {
   safetyScore: number;
   comfortScore: number;
   fishingConditionScore: number;
+  baselineFishingConditionScore: number;
+  tideConditionScore: number | null;
+  tideContributionPoints: number | null;
+  tideScoreReason: string | null;
+  scoreStatus: "PRELIMINARY_NO_TIDE" | "FINAL_WITH_TIDE" | "FINAL_NO_TIDE";
   dataConfidenceScore: number;
   confidenceReasons: string[];
   positives: string[];
@@ -58,6 +63,11 @@ export type Hour = {
   modelSeaLevelTrendM: number | null;
   tideHeightM: number | null;
   tidePhase: string | null;
+  tideChangeRateMPerHour?: number | null;
+  minutesToNearestTideEvent?: number | null;
+  nearestTideEventType?: "HIGH" | "LOW" | null;
+  minutesToNextTideEvent?: number | null;
+  nextTideEventType?: "HIGH" | "LOW" | null;
   tideDataStatus?: "AVAILABLE" | "PENDING" | "UNAVAILABLE" | "NOT_APPLICABLE";
   warningSeverity: string;
   sources: Record<string, string>;

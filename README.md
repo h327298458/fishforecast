@@ -69,6 +69,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check-eot20.ps1
 
 Open-Meteo `sea_level_height_msl` 在代码、API 和 UI 中只叫“模型海平面变化趋势”，不是正式潮汐。
 
+## 评分透明性
+
+EOT20 尚在计算时，页面只显示“临时环境评分（未计潮汐）”，临时时段也会标记为待潮汐确认。模型完成后，页面同时展示未计潮汐基线、潮汐贡献和最终鱼口环境评分，并说明潮汐来源、涨退阶段、每小时变化速度、距下一高低潮时间以及最佳小时是否改变。
+
+潮汐子评分使用涨退阶段、潮位变化速度和距最近高低潮时间，不把绝对潮高跨站直接比较。潮汐来源可信度单独进入数据可信度与窗口决策，不与鱼口条件混成“概率”。模型失败时保留无潮汐降级评分并明确标记，不生成假潮位。
+
 详细来源、认证、许可、缓存与限制见 [`docs/data-providers.md`](docs/data-providers.md)，真实剩余缺口见 [`docs/remaining-gaps.md`](docs/remaining-gaps.md)。
 
 ## 主要流程

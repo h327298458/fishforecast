@@ -1,4 +1,4 @@
-import { describe,expect,it } from 'vitest'; import { angularDifference, mergeWindows, scoreHour, weightedScore } from './scoring.js'; import type { HourlyEnvironment } from './types.js';
+import { describe,expect,it } from 'vitest'; import { angularDifference, mergeWindows, scoreHour, scoreTideCondition, weightedScore } from './scoring.js'; import type { HourlyEnvironment } from './types.js';
 const env:HourlyEnvironment={timestampUtc:'2026-01-01T00:00:00Z',timestampLocal:'2026-01-01 11:00',timezone:'Australia/Sydney',temperatureC:20,apparentTemperatureC:20,humidityPercent:60,precipitationProbabilityPercent:10,precipitationMm:0,windSpeedKmh:10,windGustKmh:18,windDirectionDeg:200,pressureHpa:1016,pressureTrendHpa3h:0,cloudCoverPercent:20,waveHeightM:1,swellHeightM:.7,swellPeriodSeconds:8,modelSeaLevelTrendM:.1,tideHeightM:1.2,tidePhase:'rising',warningSeverity:'none',daylightState:'day',sources:{},fetchedAtUtc:'2026-01-01T00:00:00Z',dataQuality:{weather:.9,marine:.8,tide:.8,warnings:.8,overall:.84}};
 describe('scoring',()=>{it('renormalises missing weights',()=>expect(weightedScore([{value:80,weight:.4},{value:null,weight:.6}])).toBe(80));it('handles direction wrap',()=>expect(angularDifference(350,10)).toBe(20));it('hard-blocks severe warnings',()=>expect(scoreHour({...env,warningSeverity:'severe'}).safetyStatus).toBe('NOT_RECOMMENDED'));it('caps safety when official warnings are unknown',()=>{const score=scoreHour({...env,warningSeverity:'unknown'});expect(score.safetyStatus).toBe('UNKNOWN');expect(score.safetyScore).toBeLessThanOrEqual(60)});it('reduces confidence without pretending missing is ideal',()=>{const r=scoreHour({...env,tideHeightM:null,tidePhase:null,dataQuality:{...env.dataQuality,overall:.52}});expect(r.dataConfidenceScore).toBe(52);expect(r.missing).toContain('tide')});it('merges two safe adjacent hours',()=>{const score=scoreHour(env);expect(mergeWindows([{timestampUtc:'a',score},{timestampUtc:'b',score}])).toHaveLength(1)})});
 describe('confidence evidence',()=>{it('passes forecast confidence reasons through to the user-visible score',()=>{const score=scoreHour({...env,dataQuality:{...env.dataQuality,overall:.73,reasons:['BOM official warnings checked','No usable tide source']}});expect(score.dataConfidenceScore).toBe(73);expect(score.confidenceReasons).toEqual(['BOM official warnings checked','No usable tide source']);})});
@@ -12,6 +12,32 @@ it('does not describe tide as missing while a real EOT20 calculation is pending'
   const score=scoreHour({...env,tideHeightM:null,tidePhase:null,tideDataStatus:'PENDING'});
   expect(score.missing).not.toContain('tide');
   expect(score.negatives).not.toContain('缺少 tide 数据');
+  expect(score.scoreStatus).toBe('PRELIMINARY_NO_TIDE');
+  expect(score.tideContributionPoints).toBeNull();
+  expect(score.fishingConditionScore).toBe(score.baselineFishingConditionScore);
+});
+
+it('shows the exact tide contribution instead of hiding it inside the final score',()=>{
+  const score=scoreHour({...env,tidePhase:'rising',tideChangeRateMPerHour:.28,minutesToNearestTideEvent:90,minutesToNextTideEvent:90,nextTideEventType:'HIGH'});
+  expect(score.scoreStatus).toBe('FINAL_WITH_TIDE');
+  expect(score.tideConditionScore).toBeGreaterThan(70);
+  expect(score.tideContributionPoints).toBe(score.fishingConditionScore-score.baselineFishingConditionScore);
+  expect(score.tideScoreReason).toContain('涨潮');
+});
+
+it('uses phase, movement speed and high-low timing in the tide subscore',()=>{
+  const moving=scoreTideCondition({...env,tidePhase:'rising',tideChangeRateMPerHour:.35,minutesToNearestTideEvent:90});
+  const slack=scoreTideCondition({...env,tidePhase:'slack',tideChangeRateMPerHour:0,minutesToNearestTideEvent:10});
+  expect(moving?.score).toBeGreaterThan(slack?.score ?? 100);
+  expect(moving?.reason).toContain('变化 0.35 m/h');
+  expect(moving?.reason).toContain('90 分钟');
+});
+
+it('labels a completed calculation without tide as a transparent degraded score',()=>{
+  const score=scoreHour({...env,tideHeightM:null,tidePhase:null,tideDataStatus:'UNAVAILABLE'});
+  expect(score.scoreStatus).toBe('FINAL_NO_TIDE');
+  expect(score.tideConditionScore).toBeNull();
+  expect(score.tideContributionPoints).toBeNull();
 });
 
 it('limits a long safe run to its best actionable four-hour window',()=>{

@@ -243,6 +243,53 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
     eot20R.status === "rejected"
       ? String(eot20R.reason instanceof Error ? eot20R.reason.message : eot20R.reason)
       : null;
+  const selectedTideEvents = (selectedTide === "BOM_OFFICIAL"
+      ? (official?.events ?? []).map((event) => ({ type: event.type as "HIGH"|"LOW", timestampUtc: event.timeUtc }))
+      : selectedTide === "EOT20_MODEL"
+        ? (eot20?.events ?? []).map((event) => ({ type: event.type as "HIGH"|"LOW", timestampUtc: event.timestampUtc }))
+        : [])
+    .map((event) => ({ ...event, time: new Date(event.timestampUtc).getTime() }))
+    .filter((event) => Number.isFinite(event.time))
+    .sort((a, b) => a.time - b.time);
+  const selectedTidePoint = (timestampUtc: string) =>
+    selectedTide === "BOM_OFFICIAL"
+      ? official
+        ? interpolateOfficial(official.events as TideEvent[], timestampUtc)
+        : null
+      : selectedTide === "EOT20_MODEL"
+        ? eot20
+          ? interpolateEot20(eot20.values, timestampUtc)
+          : null
+        : null;
+  const selectedTideContext = (timestampUtc: string) => {
+    const time = new Date(timestampUtc).getTime();
+    if (!Number.isFinite(time)) return null;
+    const current = selectedTidePoint(timestampUtc);
+    if (!current) return null;
+    const before = selectedTidePoint(new Date(time - 3_600_000).toISOString());
+    const after = selectedTidePoint(new Date(time + 3_600_000).toISOString());
+    const rate = before && after
+      ? (after.heightM - before.heightM) / 2
+      : after
+        ? after.heightM - current.heightM
+        : before
+          ? current.heightM - before.heightM
+          : null;
+    const nearest = selectedTideEvents.reduce<(typeof selectedTideEvents)[number] | null>(
+      (best, event) => !best || Math.abs(event.time - time) < Math.abs(best.time - time) ? event : best,
+      null,
+    );
+    const next = selectedTideEvents.find((event) => event.time >= time) ?? null;
+    return {
+      point: current,
+      changeRateMPerHour: rate === null ? null : Number(rate.toFixed(3)),
+      phase: rate === null ? current.phase : Math.abs(rate) < 0.01 ? "slack" as const : rate > 0 ? "rising" as const : "falling" as const,
+      minutesToNearestEvent: nearest ? Math.round(Math.abs(nearest.time - time) / 60_000) : null,
+      nearestEventType: nearest?.type ?? null,
+      minutesToNextEvent: next ? Math.round((next.time - time) / 60_000) : null,
+      nextEventType: next?.type ?? null,
+    };
+  };
   const hours: Array<
     HourlyEnvironment & { score: ReturnType<typeof scoreHour> }
   > = liveWeather.slice(0, 168).map((w, i) => {
@@ -254,12 +301,8 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
       modelPoint = eot20
         ? interpolateEot20(eot20.values, timestampUtc)
         : null;
-    const tide =
-      selectedTide === "BOM_OFFICIAL"
-        ? officialPoint
-        : selectedTide === "EOT20_MODEL"
-          ? modelPoint
-          : null;
+    const tide = selectedTide === "BOM_OFFICIAL" ? officialPoint : selectedTide === "EOT20_MODEL" ? modelPoint : null;
+    const tideContext = tide ? selectedTideContext(timestampUtc) : null;
     const activeMarineWarning = warningMatch?.matches.find(
       (warning) =>
         warning.matchStatus === "AFFECTED" &&
@@ -407,7 +450,12 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
         mApplicability === "APPLICABLE" ? (m.swellPeriodSeconds ?? null) : null,
       modelSeaLevelTrendM: m.modelSeaLevelTrendM ?? null,
       tideHeightM: tide?.heightM ?? null,
-      tidePhase: tide?.phase ?? null,
+      tidePhase: tideContext?.phase ?? tide?.phase ?? null,
+      tideChangeRateMPerHour: tideContext?.changeRateMPerHour ?? null,
+      minutesToNearestTideEvent: tideContext?.minutesToNearestEvent ?? null,
+      nearestTideEventType: tideContext?.nearestEventType ?? null,
+      minutesToNextTideEvent: tideContext?.minutesToNextEvent ?? null,
+      nextTideEventType: tideContext?.nextEventType ?? null,
       tideDataStatus: tideCalculationPending
         ? "PENDING"
         : tide
