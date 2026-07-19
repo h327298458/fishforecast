@@ -54,6 +54,7 @@ export async function getEot20Tide(point: LocationPoint, spotType: string, reque
 export async function getSpots() { return json<SavedSpot[]>(await authFetch("/api/spots"), "Unable to read saved spots"); }
 export async function getSpotComparisons() { return json<SpotComparison[]>(await authFetch("/api/spots/compare"), "Unable to compare saved spots"); }
 export async function saveSpot(point: LocationPoint, spotType: string, fishingMethod: string) { return json<SavedSpot>(await authFetch("/api/spots", jsonPost({ ...point, spotType, fishingMethod, waterType: waterTypeForSpot(spotType) })), "Unable to save spot"); }
+export async function archiveSpot(id: string) { return json<{ status: string; id: string; historyPreserved: boolean }>(await authFetch(`/api/spots/${encodeURIComponent(id)}`, { method: "DELETE" }), "Unable to remove saved spot"); }
 export async function saveEnvironmentPreferences(spotId: string, preferredTideSource: TideSource, options: Record<string, unknown> = {}) { return json<{ status: string }>(await authFetch(`/api/spots/${encodeURIComponent(spotId)}/environment-preferences`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ preferredTideSource, ...options }) }), "Unable to save tide settings"); }
 export async function getLogs() { return json<FishingLog[]>(await authFetch("/api/logs"), "Unable to read logs"); }
 export async function saveLog(input: Record<string, unknown>) { return json<{ id: string }>(await authFetch("/api/logs", jsonPost(input)), "Unable to save fishing log"); }

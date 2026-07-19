@@ -1,6 +1,6 @@
 import type { HourlyEnvironment, ScoreResult, SafetyStatus } from "./types.js";
 
-export const RULE_VERSION = "2026.07-trust.3";
+export const RULE_VERSION = "2026.07-trust.4";
 const clamp = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
 export const angularDifference = (a: number, b: number) => Math.abs(((a - b + 540) % 360) - 180);
 export const weightedScore = (items: Array<{ value: number | null; weight: number }>) => {
@@ -60,27 +60,97 @@ export function scoreHour(env: HourlyEnvironment, spotType = "wharf", profile: S
   return { safetyStatus, safetyScore: clamp(safetyScore), comfortScore: clamp(comfortScore), fishingConditionScore: clamp(fishingConditionScore), dataConfidenceScore: clamp(env.dataQuality.overall * 100), confidenceReasons: env.dataQuality.reasons ?? [], positives, negatives, missing, ruleVersion: RULE_VERSION };
 }
 
+export type FishingWindow = {
+  startUtc: string;
+  endUtc: string;
+  durationHours: number;
+  averageScore: number;
+  averageSafetyScore: number;
+  averageComfortScore: number;
+  averageConfidenceScore: number;
+  minimumConfidenceScore: number;
+  rating: "PRIORITY" | "GOOD" | "CONDITIONAL";
+  ratingLabel: string;
+  summary: string;
+  reasons: string[];
+  cautions: string[];
+};
+
+const averageWindowMetric = (hours: Array<{ score: ScoreResult }>, key: "fishingConditionScore" | "safetyScore" | "comfortScore" | "dataConfidenceScore") => Math.round(hours.reduce((sum, hour) => sum + hour.score[key], 0) / hours.length);
+const frequentWindowEvidence = (hours: Array<{ score: ScoreResult }>, key: "positives" | "negatives") => {
+  const counts = new Map<string, number>();
+  for (const hour of hours) for (const text of hour.score[key]) counts.set(text, (counts.get(text) ?? 0) + 1);
+  return [...counts].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([text]) => text);
+};
+
+function evaluateWindow(hours: Array<{ timestampUtc: string; score: ScoreResult }>): FishingWindow {
+  const fishing = averageWindowMetric(hours, "fishingConditionScore"),
+    safety = averageWindowMetric(hours, "safetyScore"),
+    comfort = averageWindowMetric(hours, "comfortScore"),
+    confidence = averageWindowMetric(hours, "dataConfidenceScore"),
+    minimumConfidence = Math.min(...hours.map((hour) => hour.score.dataConfidenceScore));
+  const rating: FishingWindow["rating"] = fishing >= 82 && comfort >= 68 && confidence >= 70 ? "PRIORITY" : fishing >= 76 && comfort >= 58 && confidence >= 62 ? "GOOD" : "CONDITIONAL";
+  const ratingLabel = rating === "PRIORITY" ? "优先考虑" : rating === "GOOD" ? "条件较好" : "条件型窗口";
+  const summary = confidence < 65
+    ? "环境指标达到窗口门槛，但数据可信度一般；适合顺路尝试，不建议仅凭该窗口专程远行。"
+    : comfort < 60
+      ? "鱼口环境达到门槛，但体感条件一般；请结合个人耐受程度决定。"
+      : rating === "PRIORITY"
+        ? "安全、鱼口环境、舒适度和可信度均较协调，可优先考虑。"
+        : "各项达到推荐门槛，可作为本日备选出钓时段。";
+  const reasons = frequentWindowEvidence(hours, "positives");
+  const cautions = frequentWindowEvidence(hours, "negatives");
+  if (confidence < 65) cautions.unshift("窗口数据可信度一般");
+  if (comfort < 60) cautions.unshift("窗口平均舒适度偏低");
+  const firstTime = new Date(hours[0].timestampUtc).getTime(),
+    lastTime = new Date(hours.at(-1)!.timestampUtc).getTime();
+  const intervalMs = hours.length > 1 ? Math.max(3_600_000, new Date(hours[1].timestampUtc).getTime() - firstTime) : 3_600_000;
+  const validTimes = Number.isFinite(firstTime) && Number.isFinite(lastTime);
+  return {
+    startUtc: hours[0].timestampUtc,
+    endUtc: validTimes ? new Date(lastTime + intervalMs).toISOString() : hours.at(-1)!.timestampUtc,
+    durationHours: hours.length,
+    averageScore: fishing,
+    averageSafetyScore: safety,
+    averageComfortScore: comfort,
+    averageConfidenceScore: confidence,
+    minimumConfidenceScore: minimumConfidence,
+    rating,
+    ratingLabel,
+    summary,
+    reasons: reasons.length ? reasons : ["连续时段达到安全、鱼口环境与可信度门槛"],
+    cautions: [...new Set(cautions)].slice(0, 3),
+  };
+}
+
 export function mergeWindows(hours: Array<{ timestampUtc: string; score: ScoreResult }>, minScore = 72) {
-  const windows: Array<{ startUtc: string; endUtc: string; averageScore: number }> = [];
+  const runs: Array<typeof hours> = [];
   let current: typeof hours = [];
   for (const hour of hours) {
     const usable = hour.score.fishingConditionScore >= minScore && hour.score.dataConfidenceScore >= 55 && hour.score.safetyStatus === "SAFE";
     if (usable) current.push(hour);
-    if ((!usable || hour === hours.at(-1)) && current.length) {
-      if (current.length >= 2) {
-        let best: typeof current | null = null;
-        const targetLength = Math.min(current.length, 5);
-        for (let startIndex = 0; startIndex < current.length - 1; startIndex += 1) {
-          const candidate = current.slice(startIndex, startIndex + targetLength);
-          if (candidate.length !== targetLength) continue;
-          const candidateAverage = candidate.reduce((sum, item) => sum + item.score.fishingConditionScore, 0) / candidate.length;
-          const bestAverage = best ? best.reduce((sum, item) => sum + item.score.fishingConditionScore, 0) / best.length : -1;
-          if (!best || candidateAverage > bestAverage) best = candidate;
-        }
-        if (best) windows.push({ startUtc: best[0].timestampUtc, endUtc: best.at(-1)!.timestampUtc, averageScore: Math.round(best.reduce((sum, item) => sum + item.score.fishingConditionScore, 0) / best.length) });
-      }
+    else if (current.length) {
+      runs.push(current);
       current = [];
     }
+  }
+  if (current.length) runs.push(current);
+  const windows: FishingWindow[] = [];
+  for (const run of runs) {
+    if (run.length < 2) continue;
+    let best: { hours: typeof run; decisionIndex: number } | null = null;
+    for (let length = 2; length <= Math.min(4, run.length); length += 1) {
+      for (let startIndex = 0; startIndex <= run.length - length; startIndex += 1) {
+        const candidate = run.slice(startIndex, startIndex + length);
+        const fishing = averageWindowMetric(candidate, "fishingConditionScore"),
+          safety = averageWindowMetric(candidate, "safetyScore"),
+          comfort = averageWindowMetric(candidate, "comfortScore"),
+          confidence = averageWindowMetric(candidate, "dataConfidenceScore");
+        const decisionIndex = fishing * 0.5 + confidence * 0.25 + comfort * 0.15 + safety * 0.1 + (length - 2) * 0.35;
+        if (!best || decisionIndex > best.decisionIndex) best = { hours: candidate, decisionIndex };
+      }
+    }
+    if (best) windows.push(evaluateWindow(best.hours));
   }
   return windows;
 }

@@ -247,7 +247,7 @@ app.get("/api/forecast", async (req, reply) => {
   );
   let snapshotId: string | null = null;
   const spotId = requestedSpotId;
-  if (forecast.tides.calculationStatus !== "PENDING" && spotId && authenticatedUser && db.prepare("SELECT 1 FROM spots WHERE id=? AND owner_user_id=?").get(spotId, authenticatedUser.id)) {
+  if (forecast.tides.calculationStatus !== "PENDING" && spotId && authenticatedUser && db.prepare("SELECT 1 FROM spots WHERE id=? AND owner_user_id=? AND archived_at_utc IS NULL").get(spotId, authenticatedUser.id)) {
     snapshotId = randomUUID();
     const snapshot = {
       generatedAtUtc: forecast.generatedAtUtc,
@@ -273,7 +273,7 @@ app.get("/api/spots", async (request, reply) => {
   if (!user) return;
   return db
     .prepare(
-      "SELECT s.id,s.name,COALESCE(s.address,'') AS address,s.latitude,s.longitude,s.state,s.timezone,s.spot_type AS spotType,s.water_type AS waterType,s.fishing_method AS fishingMethod,s.target_species AS targetSpecies,s.allow_night AS allowNight,s.created_at_utc AS createdAtUtc,COALESCE(p.preferred_tide_source,'BOM_OFFICIAL') AS preferredTideSource,p.shoreline_direction_deg AS shorelineDirectionDeg,p.casting_direction_deg AS castingDirectionDeg,p.exposure_direction_deg AS exposureDirectionDeg,p.has_building_shelter AS hasBuildingShelter,p.has_cliff_shelter AS hasCliffShelter,p.open_coast AS openCoast,p.rock_access_required AS rockAccessRequired,p.slippery_access AS slipperyAccess,p.night_fishing_allowed AS nightFishingAllowed,p.lighting_available AS lightingAvailable,p.maximum_wind_kmh AS maximumWindKmh,p.maximum_gust_kmh AS maximumGustKmh,p.maximum_wave_height_m AS maximumWaveHeightM,p.notes FROM spots s LEFT JOIN spot_environment_preferences p ON p.spot_id=s.id WHERE s.owner_user_id=? ORDER BY s.created_at_utc DESC",
+      "SELECT s.id,s.name,COALESCE(s.address,'') AS address,s.latitude,s.longitude,s.state,s.timezone,s.spot_type AS spotType,s.water_type AS waterType,s.fishing_method AS fishingMethod,s.target_species AS targetSpecies,s.allow_night AS allowNight,s.created_at_utc AS createdAtUtc,COALESCE(p.preferred_tide_source,'BOM_OFFICIAL') AS preferredTideSource,p.shoreline_direction_deg AS shorelineDirectionDeg,p.casting_direction_deg AS castingDirectionDeg,p.exposure_direction_deg AS exposureDirectionDeg,p.has_building_shelter AS hasBuildingShelter,p.has_cliff_shelter AS hasCliffShelter,p.open_coast AS openCoast,p.rock_access_required AS rockAccessRequired,p.slippery_access AS slipperyAccess,p.night_fishing_allowed AS nightFishingAllowed,p.lighting_available AS lightingAvailable,p.maximum_wind_kmh AS maximumWindKmh,p.maximum_gust_kmh AS maximumGustKmh,p.maximum_wave_height_m AS maximumWaveHeightM,p.notes FROM spots s LEFT JOIN spot_environment_preferences p ON p.spot_id=s.id WHERE s.owner_user_id=? AND s.archived_at_utc IS NULL ORDER BY s.created_at_utc DESC",
     )
     .all(user.id);
 });
@@ -282,7 +282,7 @@ app.get("/api/spots/compare", async (request, reply) => {
   if (!user) return;
   const rows = db.prepare(`SELECT s.id AS spotId,s.name,s.latitude,s.longitude,fs.created_at_utc AS generatedAtUtc,fs.payload_json AS payloadJson
     FROM spots s LEFT JOIN forecast_snapshots fs ON fs.id=(SELECT f2.id FROM forecast_snapshots f2 WHERE f2.spot_id=s.id ORDER BY f2.created_at_utc DESC LIMIT 1)
-    WHERE s.owner_user_id=? ORDER BY s.created_at_utc DESC`).all(user.id) as Array<Record<string, unknown>>;
+    WHERE s.owner_user_id=? AND s.archived_at_utc IS NULL ORDER BY s.created_at_utc DESC`).all(user.id) as Array<Record<string, unknown>>;
   type ComparisonScore = { safetyStatus?: string; safetyScore?: number; comfortScore?: number; fishingConditionScore?: number; dataConfidenceScore?: number };
   type ComparisonHour = { score?: ComparisonScore };
   type ComparisonSnapshot = { days?: Array<{ windows?: Array<Record<string, unknown>>; scores?: ComparisonHour[] }>; observation?: { selected?: { windSpeedKmh?: number | null } }; tides?: { actualTideSourceUsed?: string } };
@@ -314,7 +314,7 @@ app.get("/api/spots/:id", async (req, reply) => {
   const { id } = req.params as { id: string };
   const spot = db
     .prepare(
-      "SELECT id,name,COALESCE(address,'') AS address,latitude,longitude,state,timezone,spot_type AS spotType,water_type AS waterType,fishing_method AS fishingMethod,target_species AS targetSpecies,allow_night AS allowNight,created_at_utc AS createdAtUtc FROM spots WHERE id=? AND owner_user_id=?",
+      "SELECT id,name,COALESCE(address,'') AS address,latitude,longitude,state,timezone,spot_type AS spotType,water_type AS waterType,fishing_method AS fishingMethod,target_species AS targetSpecies,allow_night AS allowNight,created_at_utc AS createdAtUtc FROM spots WHERE id=? AND owner_user_id=? AND archived_at_utc IS NULL",
     )
     .get(id, user.id);
   return spot ?? reply.code(404).send({ status: "not_found", data: null });
@@ -339,7 +339,7 @@ app.post("/api/spots", async (req, reply) => {
   if (existing && existing.owner_user_id !== user.id)
     return reply.code(404).send({ status: "not_found", data: null });
   db.prepare(
-    `INSERT INTO spots (id,name,address,latitude,longitude,state,timezone,spot_type,water_type,fishing_method,target_species,allow_night,created_at_utc,owner_user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,address=excluded.address,latitude=excluded.latitude,longitude=excluded.longitude,state=excluded.state,timezone=excluded.timezone,spot_type=excluded.spot_type,water_type=excluded.water_type,fishing_method=excluded.fishing_method,target_species=excluded.target_species,allow_night=excluded.allow_night`,
+    `INSERT INTO spots (id,name,address,latitude,longitude,state,timezone,spot_type,water_type,fishing_method,target_species,allow_night,created_at_utc,owner_user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,address=excluded.address,latitude=excluded.latitude,longitude=excluded.longitude,state=excluded.state,timezone=excluded.timezone,spot_type=excluded.spot_type,water_type=excluded.water_type,fishing_method=excluded.fishing_method,target_species=excluded.target_species,allow_night=excluded.allow_night,archived_at_utc=NULL`,
   ).run(
     id,
     b.name,
@@ -365,6 +365,18 @@ app.post("/api/spots", async (req, reply) => {
         )
         .get(id, user.id),
     );
+});
+app.delete("/api/spots/:id", async (req, reply) => {
+  if (!requireSameOrigin(req, reply)) return;
+  const user = requireUser(req, reply);
+  if (!user) return;
+  const { id } = req.params as { id: string };
+  const result = db
+    .prepare("UPDATE spots SET archived_at_utc=? WHERE id=? AND owner_user_id=? AND archived_at_utc IS NULL")
+    .run(new Date().toISOString(), id, user.id);
+  if (!result.changes)
+    return reply.code(404).send({ status: "not_found", data: null });
+  return { status: "archived", id, historyPreserved: true };
 });
 app.put("/api/spots/:id/environment-preferences", async (req, reply) => {
   if (!requireSameOrigin(req, reply)) return;

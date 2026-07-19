@@ -15,4 +15,8 @@ export function applyMigrations(db: Database.Database) {
     db.exec('ALTER TABLE spots ADD COLUMN owner_user_id TEXT REFERENCES users(id)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_spots_owner ON spots(owner_user_id, created_at_utc)');
   }
+  if (!columns.some((column) => column.name === 'archived_at_utc')) {
+    db.exec('ALTER TABLE spots ADD COLUMN archived_at_utc TEXT');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_spots_owner_active ON spots(owner_user_id, archived_at_utc, created_at_utc)');
 }

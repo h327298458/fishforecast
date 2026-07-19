@@ -21,6 +21,33 @@ it('limits a long safe run to its best actionable four-hour window',()=>{
   expect((new Date(windows[0].endUtc).getTime()-new Date(windows[0].startUtc).getTime())/3_600_000).toBeLessThanOrEqual(4);
 });
 
+it('describes a recommended window with independent safety comfort and confidence evidence',()=>{
+  const base=scoreHour(env);
+  const hours=[0,1,2].map((value)=>({timestampUtc:`2026-01-01T${String(value).padStart(2,'0')}:00:00Z`,score:{...base,safetyStatus:'SAFE' as const,safetyScore:88,comfortScore:76,fishingConditionScore:84,dataConfidenceScore:78,positives:['平均风速较温和'],negatives:[]}}));
+  const [window]=mergeWindows(hours);
+  expect(window.rating).toBe('PRIORITY');
+  expect(window.ratingLabel).toBe('优先考虑');
+  expect(window.durationHours).toBe(3);
+  expect(window.averageSafetyScore).toBe(88);
+  expect(window.averageComfortScore).toBe(76);
+  expect(window.averageConfidenceScore).toBe(78);
+  expect(window.reasons).toContain('平均风速较温和');
+});
+
+it('prefers a balanced high-confidence window over a marginally higher fish score',()=>{
+  const base=scoreHour(env);
+  const hours=[
+    {fish:88,confidence:56,comfort:40},
+    {fish:88,confidence:56,comfort:40},
+    {fish:84,confidence:90,comfort:90},
+    {fish:84,confidence:90,comfort:90},
+  ].map((value,index)=>({timestampUtc:`2026-01-01T${String(index).padStart(2,'0')}:00:00Z`,score:{...base,safetyStatus:'SAFE' as const,safetyScore:90,fishingConditionScore:value.fish,dataConfidenceScore:value.confidence,comfortScore:value.comfort}}));
+  const [window]=mergeWindows(hours);
+  expect(window.startUtc).toBe('2026-01-01T02:00:00Z');
+  expect(window.averageConfidenceScore).toBe(90);
+  expect(window.averageComfortScore).toBe(90);
+});
+
 it('scores an exposed headwind more conservatively than a sheltered spot',()=>{
   const windy={...env,windSpeedKmh:24,windGustKmh:38,windDirectionDeg:90};
   const exposed=scoreHour(windy,'beach',{exposureDirectionDeg:90});

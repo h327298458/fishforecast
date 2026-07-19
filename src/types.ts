@@ -63,7 +63,21 @@ export type Hour = {
   sources: Record<string, string>;
   score: Score;
 };
-export type Window = { startUtc: string; endUtc: string; averageScore: number };
+export type Window = {
+  startUtc: string;
+  endUtc: string;
+  durationHours: number;
+  averageScore: number;
+  averageSafetyScore: number;
+  averageComfortScore: number;
+  averageConfidenceScore: number;
+  minimumConfidenceScore: number;
+  rating: "PRIORITY" | "GOOD" | "CONDITIONAL";
+  ratingLabel: string;
+  summary: string;
+  reasons: string[];
+  cautions: string[];
+};
 export type SpotComparison = {
   spotId: string;
   name: string;

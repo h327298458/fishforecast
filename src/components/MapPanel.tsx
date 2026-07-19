@@ -23,7 +23,11 @@ export function MapPanel({
     [activeIndex, setActiveIndex] = useState(-1),
     [locating, setLocating] = useState(false);
   const request = useRef<AbortController | null>(null),
-    skipNextSearch = useRef(false);
+    skipNextSearch = useRef(false),
+    pointRef = useRef(point);
+  useEffect(() => {
+    pointRef.current = point;
+  }, [point]);
   useEffect(() => {
     if (skipNextSearch.current) {
       skipNextSearch.current = false;
@@ -39,7 +43,7 @@ export function MapPanel({
       try {
         const data = await searchLocations(
           query,
-          point ?? undefined,
+          pointRef.current ?? undefined,
           controller.signal,
         );
         setResults(data);
@@ -53,7 +57,7 @@ export function MapPanel({
       }
     }, 350);
     return () => clearTimeout(timer);
-  }, [query, point]);
+  }, [query]);
   function choose(result: LocationPoint) {
     request.current?.abort();
     skipNextSearch.current = true;

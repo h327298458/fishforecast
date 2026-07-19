@@ -12,8 +12,10 @@ import {
   Settings,
   ShieldAlert,
   Star,
+  Trash2,
 } from "lucide-react";
 import {
+  archiveSpot,
   getAnalytics,
   getCurrentUser,
   getEot20Tide,
@@ -78,6 +80,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
     [progress, setProgress] = useState<ForecastProgress | null>(null),
     [error, setError] = useState(""),
     [modal, setModal] = useState(false),
+    [spotPendingRemoval, setSpotPendingRemoval] = useState<SavedSpot | null>(null),
     [toast, setToast] = useState(""),
     [accuracy, setAccuracy] = useState<number | null>(null),
     [view, setView] = useState<View>("forecast"),
@@ -250,6 +253,18 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
       setToast("钓点已保存为私有收藏");
     } catch (e) {
       setToast(e instanceof Error ? e.message : "保存失败");
+    }
+  }
+  async function removeSavedSpot() {
+    if (!spotPendingRemoval) return;
+    try {
+      await archiveSpot(spotPendingRemoval.id);
+      const items = await getSpots();
+      setSaved(items);
+      setSpotPendingRemoval(null);
+      setToast("已取消收藏；历史实钓和预测快照仍然保留");
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : "取消收藏失败");
     }
   }
   async function chooseTideSource(source: TideSource) {
@@ -574,6 +589,12 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
                 <p>
                   <ShieldAlert /> 请在出发前核对最新官方预报和当地法规
                 </p>
+                {isSaved ? (
+                  <button className="remove-favorite" onClick={() => setSpotPendingRemoval(point as SavedSpot)}>
+                    <Trash2 />
+                    取消收藏
+                  </button>
+                ) : null}
                 <button onClick={() => void persist()}>
                   <Save />
                   {isSaved ? "更新钓点" : "保存钓点"}
@@ -638,7 +659,29 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
           }}
         />
       ) : null}
+      {spotPendingRemoval ? (
+        <RemoveSpotDialog
+          spot={spotPendingRemoval}
+          onCancel={() => setSpotPendingRemoval(null)}
+          onConfirm={() => void removeSavedSpot()}
+        />
+      ) : null}
       {toast ? <div className="toast">{toast}</div> : null}
+    </div>
+  );
+}
+function RemoveSpotDialog({ spot, onCancel, onConfirm }: { spot: SavedSpot; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="remove-spot-dialog" role="dialog" aria-modal="true" aria-labelledby="remove-spot-title">
+        <Trash2 />
+        <h2 id="remove-spot-title">取消收藏“{spot.name}”？</h2>
+        <p>该钓点会从“我的钓点”和横向比较中移除，但已有实钓日志与预测快照不会删除。</p>
+        <div>
+          <button type="button" onClick={onCancel}>返回</button>
+          <button type="button" className="danger" onClick={onConfirm}>确认取消收藏</button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -656,7 +699,32 @@ function ProviderStrip({ status }: { status: Forecast["providerStatus"] }) {
 }
 function RecommendedWindows({ windows, timezone }: { windows: Window[]; timezone: string }) {
   const format = (value: string) => new Intl.DateTimeFormat("zh-CN", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
-  return <section className="recommended-windows"><div><h2>推荐出钓窗口</h2><small>仅显示安全状态为 SAFE、环境条件至少 72 分、数据可信度至少 55 分的连续 2–4 小时最佳片段。</small></div>{windows.length ? <div className="window-list">{windows.map((window) => <article key={window.startUtc}><b>{format(window.startUtc)}–{format(window.endUtc)}</b><span>环境条件 {window.averageScore}</span></article>)}</div> : <p>今天没有满足安全、可信度和环境阈值的连续窗口。</p>}</section>;
+  return (
+    <section className="recommended-windows">
+      <div>
+        <h2>推荐出钓窗口</h2>
+        <small>先以安全状态 SAFE 硬筛选，再要求环境条件 ≥72、可信度 ≥55，并在连续 2–4 小时中综合鱼口环境、舒适度、安全分和可信度选择最协调的片段。</small>
+      </div>
+      {windows.length ? (
+        <div className="window-list">
+          {windows.map((window) => (
+            <article key={window.startUtc} className={`window-${window.rating.toLowerCase()}`}>
+              <div className="window-title">
+                <b>{format(window.startUtc)}–{format(window.endUtc)}</b>
+                <em>{window.ratingLabel}</em>
+              </div>
+              <span>{window.durationHours} 小时 · 环境 {window.averageScore} · 舒适 {window.averageComfortScore} · 可信度 {window.averageConfidenceScore}</span>
+              <p>{window.summary}</p>
+              {window.reasons.length ? <small className="window-reason">依据：{window.reasons.join("；")}</small> : null}
+              {window.cautions.length ? <small className="window-caution">注意：{window.cautions.join("；")}</small> : null}
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p>今天没有满足安全、可信度和环境阈值的连续窗口。</p>
+      )}
+    </section>
+  );
 }
 function LogsView({ logs }: { logs: FishingLog[] }) {
   return (
