@@ -214,6 +214,7 @@ app.get("/api/geocode/reverse", async (req, reply) => {
 });
 app.get("/api/forecast", async (req, reply) => {
   const q = req.query as Record<string, string>;
+  const deferEot20 = q.deferEot20 === "true";
   const latitude = Number(q.lat),
     longitude = Number(q.lon);
   if (!Number.isFinite(latitude) || !inAustralia(latitude, longitude))
@@ -240,12 +241,13 @@ app.get("/api/forecast", async (req, reply) => {
       waterType: q.waterType ?? "estuary_or_harbour",
       fishingMethod: q.fishingMethod ?? "bottom_fishing",
       preferredTideSource: q.preferredTideSource ?? "BOM_OFFICIAL",
+      deferEot20,
     },
     db,
   );
   let snapshotId: string | null = null;
   const spotId = requestedSpotId;
-  if (spotId && authenticatedUser && db.prepare("SELECT 1 FROM spots WHERE id=? AND owner_user_id=?").get(spotId, authenticatedUser.id)) {
+  if (forecast.tides.calculationStatus !== "PENDING" && spotId && authenticatedUser && db.prepare("SELECT 1 FROM spots WHERE id=? AND owner_user_id=?").get(spotId, authenticatedUser.id)) {
     snapshotId = randomUUID();
     const snapshot = {
       generatedAtUtc: forecast.generatedAtUtc,
@@ -265,7 +267,7 @@ app.get("/api/forecast", async (req, reply) => {
   }
   return { ...forecast, snapshotId };
 });
-app.get("/api/tides/eot20",async(req,reply)=>{const q=req.query as Record<string,string>;const latitude=Number(q.lat),longitude=Number(q.lon),intervalMinutes=Number(q.intervalMinutes??60);if(!inAustralia(latitude,longitude)||!Number.isFinite(intervalMinutes)||intervalMinutes<10)return reply.code(400).send({status:"invalid",reason:"INVALID_TIDE_QUERY",provider:"EOT20"});const start=q.startUtc?new Date(q.startUtc):new Date();if(Number.isNaN(start.getTime()))return reply.code(400).send({status:"invalid",reason:"INVALID_TIDE_START",provider:"EOT20"});if(!q.startUtc)start.setUTCMinutes(0,0,0);const end=q.endUtc?new Date(q.endUtc):new Date(start.getTime()+7*86400000);if(Number.isNaN(end.getTime())||end<=start)return reply.code(400).send({status:"invalid",reason:"INVALID_TIDE_END",provider:"EOT20"});try{const data=await calculateEot20({latitude,longitude,startUtc:start.toISOString(),endUtc:end.toISOString(),intervalMinutes,spotType:q.spotType??"beach",waterType:q.waterType});return{status:"available",provider:"EOT20",data};}catch(error){const reason=error instanceof Error?error.message:"EOT20_FAILED";return reply.code(reason==="EOT20_NOT_APPLICABLE"?422:503).send({status:"unavailable",reason,provider:"EOT20"});}});
+app.get("/api/tides/eot20",async(req,reply)=>{const q=req.query as Record<string,string>;const latitude=Number(q.lat),longitude=Number(q.lon),intervalMinutes=Number(q.intervalMinutes??60);if(!inAustralia(latitude,longitude)||!Number.isFinite(intervalMinutes)||intervalMinutes<10)return reply.code(400).send({status:"invalid",reason:"INVALID_TIDE_QUERY",provider:"EOT20"});const start=q.startUtc?new Date(q.startUtc):new Date();if(Number.isNaN(start.getTime()))return reply.code(400).send({status:"invalid",reason:"INVALID_TIDE_START",provider:"EOT20"});if(!q.startUtc)start.setUTCMinutes(0,0,0);const end=q.endUtc?new Date(q.endUtc):new Date(start.getTime()+7*86400000);if(Number.isNaN(end.getTime())||end<=start)return reply.code(400).send({status:"invalid",reason:"INVALID_TIDE_END",provider:"EOT20"});try{const data=await calculateEot20({latitude,longitude,startUtc:start.toISOString(),endUtc:end.toISOString(),intervalMinutes,spotType:q.spotType??"beach",waterType:q.waterType,timezone:q.timezone});return{status:"available",provider:"EOT20",data};}catch(error){const reason=error instanceof Error?error.message:"EOT20_FAILED";return reply.code(reason==="EOT20_NOT_APPLICABLE"?422:503).send({status:"unavailable",reason,provider:"EOT20"});}});
 app.get("/api/spots", async (request, reply) => {
   const user = requireUser(request, reply);
   if (!user) return;

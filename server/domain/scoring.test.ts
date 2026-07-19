@@ -8,6 +8,12 @@ it('does not describe deliberately excluded harbour wave data as missing',()=>{
   expect(score.missing).not.toContain('wave');
 });
 
+it('does not describe tide as missing while a real EOT20 calculation is pending',()=>{
+  const score=scoreHour({...env,tideHeightM:null,tidePhase:null,tideDataStatus:'PENDING'});
+  expect(score.missing).not.toContain('tide');
+  expect(score.negatives).not.toContain('缺少 tide 数据');
+});
+
 it('limits a long safe run to its best actionable four-hour window',()=>{
   const safe=(value:number)=>({timestampUtc:`2026-01-01T${String(value).padStart(2,'0')}:00:00Z`,score:{...scoreHour(env),fishingConditionScore:72+value,dataConfidenceScore:80,safetyStatus:'SAFE' as const}});
   const windows=mergeWindows([0,1,2,3,4,5,6].map(safe));

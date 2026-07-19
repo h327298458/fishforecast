@@ -43,6 +43,7 @@ const baseSpot = {
   waterType: "estuary_or_harbour",
   fishingMethod: "bottom_fishing",
   preferredTideSource: "BOM_OFFICIAL",
+  deferEot20: false,
 };
 type Input = Partial<typeof baseSpot>;
 const canonicalTideSource = (value: unknown) =>
@@ -146,8 +147,11 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
   // first request is made late in the day. These are model values, not a flat
   // extrapolation of the first current-time value.
   const eot20Start = new Date(start.getTime() - 24 * 3_600_000);
+  const tideCalculationPending = Boolean(
+    spot.deferEot20 && shouldCalculateEot20,
+  );
   const eot20Task =
-    shouldCalculateEot20
+    shouldCalculateEot20 && !tideCalculationPending
       ? calculateEot20({
           ...point,
           startUtc: eot20Start.toISOString(),
@@ -208,7 +212,11 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
     modelAvailable: Boolean(eot20),
   });
   const tideFallbackReason =
-    selectedTide === preferredTideSource
+    tideCalculationPending
+      ? preferredTideSource === "EOT20_MODEL"
+        ? "EOT20_CALCULATION_PENDING"
+        : "OFFICIAL_TIDE_UNAVAILABLE_EOT20_PENDING"
+      : selectedTide === preferredTideSource
       ? null
       : preferredTideSource === "EOT20_MODEL"
         ? String(
@@ -333,8 +341,13 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
       confidenceReasons.push("Marine 波浪数据本次无法获取");
     }
     if (selectedTide === "NO_TIDE") {
-      overall -= 0.16;
-      confidenceReasons.push("本时段没有可用的正式潮汐评分数据");
+      if (tideCalculationPending) {
+        overall -= 0.04;
+        confidenceReasons.push("EOT20 正在后台计算，当前评分暂未计入潮汐");
+      } else {
+        overall -= 0.16;
+        confidenceReasons.push("本时段没有可用的正式潮汐评分数据");
+      }
     } else if (selectedTide === "BOM_OFFICIAL") {
       confidenceReasons.push("使用官方参考港潮汐；并非钓点现场逐分钟潮位");
     } else confidenceReasons.push("使用 EOT20 经纬度模型潮汐");
@@ -395,6 +408,11 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
       modelSeaLevelTrendM: m.modelSeaLevelTrendM ?? null,
       tideHeightM: tide?.heightM ?? null,
       tidePhase: tide?.phase ?? null,
+      tideDataStatus: tideCalculationPending
+        ? "PENDING"
+        : tide
+          ? "AVAILABLE"
+          : "UNAVAILABLE",
       warningSeverity:
         activeMarineWarning?.severity ??
         (possiblyAffectedWarning ? "moderate" : warnings ? "none" : "unknown"),
@@ -498,6 +516,7 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
           },
     regulations: getRegulationEntry(spot.state),
     tides: {
+      calculationStatus: tideCalculationPending ? "PENDING" : "COMPLETE",
       selectedSource: selectedTide,
       preferredSource: preferredTideSource,
       actualTideSourceUsed: selectedTide,
@@ -520,10 +539,23 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
         ...installation,
         available: installed,
         status:
-          shouldCalculateEot20 || !installed ? "UNAVAILABLE" : "NOT_REQUESTED",
+          tideCalculationPending
+            ? "PENDING"
+            : shouldCalculateEot20 || !installed
+              ? "UNAVAILABLE"
+              : "NOT_REQUESTED",
         calculated: false,
+        request: tideCalculationPending
+          ? {
+              startUtc: eot20Start.toISOString(),
+              endUtc: end.toISOString(),
+              intervalMinutes: 60,
+            }
+          : null,
         reason:
-          shouldCalculateEot20
+          tideCalculationPending
+            ? "EOT20_BACKGROUND_CALCULATION_REQUIRED"
+            : shouldCalculateEot20
             ? (eot20FailureReason ?? "EOT20_UNAVAILABLE")
             : installed
               ? "ON_DEMAND_MODEL_NOT_REQUESTED"
@@ -648,6 +680,8 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
       eot20: {
         status: eot20
           ? "available"
+          : tideCalculationPending
+            ? "pending"
           : shouldCalculateEot20
             ? "unavailable"
             : eot20Installation.status === "REAL"
@@ -656,6 +690,8 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
         provider: "EOT20",
         reason: eot20
           ? null
+          : tideCalculationPending
+            ? "EOT20_BACKGROUND_CALCULATION_REQUIRED"
           : shouldCalculateEot20
             ? (eot20FailureReason ?? eot20Installation.reason ?? "EOT20_UNAVAILABLE")
             : eot20Installation.status === "REAL"

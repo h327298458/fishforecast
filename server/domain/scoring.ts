@@ -22,7 +22,8 @@ export type SpotSafetyProfile = {
 
 export function scoreHour(env: HourlyEnvironment, spotType = "wharf", profile: SpotSafetyProfile = {}): ScoreResult {
   const waveIsDeliberatelyExcluded = env.waveDataStatus === "LOW_CONFIDENCE" || env.waveDataStatus === "NOT_APPLICABLE";
-  const missing = Object.entries({ wind: env.windSpeedKmh, gust: env.windGustKmh, pressure: env.pressureHpa, tide: env.tideHeightM, wave: waveIsDeliberatelyExcluded ? 0 : env.waveHeightM }).filter(([, value]) => value === null).map(([key]) => key);
+  const tideIsPending = env.tideDataStatus === "PENDING";
+  const missing = Object.entries({ wind: env.windSpeedKmh, gust: env.windGustKmh, pressure: env.pressureHpa, tide: tideIsPending ? 0 : env.tideHeightM, wave: waveIsDeliberatelyExcluded ? 0 : env.waveHeightM }).filter(([, value]) => value === null).map(([key]) => key);
   const angle = profile.exposureDirectionDeg !== null && profile.exposureDirectionDeg !== undefined && env.windDirectionDeg !== null ? angularDifference(env.windDirectionDeg, profile.exposureDirectionDeg) : null;
   const exposureMultiplier = profile.sheltered ? 0.82 : angle === null ? 1 : angle <= 45 ? 1.18 : angle >= 135 ? 0.82 : 1;
   const evaluatedWind = env.windSpeedKmh === null ? null : env.windSpeedKmh * exposureMultiplier;

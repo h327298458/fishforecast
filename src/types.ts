@@ -58,6 +58,7 @@ export type Hour = {
   modelSeaLevelTrendM: number | null;
   tideHeightM: number | null;
   tidePhase: string | null;
+  tideDataStatus?: "AVAILABLE" | "PENDING" | "UNAVAILABLE" | "NOT_APPLICABLE";
   warningSeverity: string;
   sources: Record<string, string>;
   score: Score;
@@ -87,7 +88,8 @@ export type ProviderState = {
     | "request_failed"
     | "no_data"
     | "not_applicable"
-    | "not_requested";
+    | "not_requested"
+    | "pending";
   provider: string;
   reason?: string | null;
 };
@@ -100,6 +102,7 @@ export type Forecast = {
   degraded: boolean;
   generatedAtUtc: string;
   tides: {
+    calculationStatus?: "PENDING" | "COMPLETE";
     selectedSource: TideSource;
     preferredSource: TideSource;
     actualTideSourceUsed: TideSource;
@@ -128,6 +131,11 @@ export type Forecast = {
         heightM: number;
       }>;
       applicability?: string;
+      request?: null | {
+        startUtc: string;
+        endUtc: string;
+        intervalMinutes: number;
+      };
     };
     comparison: null | {
       timeDifferenceMinutes: number;

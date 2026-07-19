@@ -3,7 +3,7 @@ import type { FishingLog, Forecast, LocationPoint, SavedSpot, SpotComparison, Ti
 export type AuthUser = { id: string; username: string; role: "ADMIN" | "USER" };
 export type Invitation = { id: string; createdAtUtc: string; expiresAtUtc: string | null; maxUses: number; uses: number; revokedAtUtc: string | null; createdByUsername: string };
 export type ManagedUser = AuthUser & { createdAtUtc: string; lastLoginAtUtc: string | null; disabledAtUtc: string | null; activeSessions: number };
-export type Eot20Model = { model: string; version: string; applicability: string; confidence: number; calculationCoordinates: { latitude: number; longitude: number }; events: Array<{ type: "HIGH" | "LOW"; timestampUtc: string; timestampLocal: string; heightM: number }>; values: Array<{ timestampUtc: string; heightM: number }>; dailyRanges: Array<{ dateUtc: string; rangeM: number; highM: number; lowM: number }> };
+export type Eot20Model = { model: string; version: string; applicability: string; confidence: number; cacheHit?: boolean; calculationCoordinates: { latitude: number; longitude: number }; events: Array<{ type: "HIGH" | "LOW"; timestampUtc: string; timestampLocal: string; heightM: number }>; values: Array<{ timestampUtc: string; heightM: number }>; dailyRanges: Array<{ dateUtc: string; rangeM: number; highM: number; lowM: number }> };
 
 async function json<T>(response: Response, message: string) {
   if (!response.ok) {
@@ -37,12 +37,17 @@ export async function searchLocations(query: string, focus?: { latitude: number;
 export async function reverseLocation(latitude: number, longitude: number, signal?: AbortSignal) {
   return (await json<{ data: LocationPoint | null }>(await fetch(`/api/geocode/reverse?lat=${latitude}&lon=${longitude}`, { signal }), "Reverse geocoding failed")).data;
 }
-export async function getForecast(point: LocationPoint, spotType: string, fishingMethod: string, preferredTideSource: TideSource = "BOM_OFFICIAL") {
-  const params = new URLSearchParams({ spotId: point.id, lat: String(point.latitude), lon: String(point.longitude), name: point.name, address: point.address, state: point.state, timezone: point.timezone, spotType, waterType: waterTypeForSpot(spotType), fishingMethod, preferredTideSource });
+export async function getForecast(point: LocationPoint, spotType: string, fishingMethod: string, preferredTideSource: TideSource = "BOM_OFFICIAL", deferEot20 = false) {
+  const params = new URLSearchParams({ spotId: point.id, lat: String(point.latitude), lon: String(point.longitude), name: point.name, address: point.address, state: point.state, timezone: point.timezone, spotType, waterType: waterTypeForSpot(spotType), fishingMethod, preferredTideSource, deferEot20: String(deferEot20) });
   return json<Forecast>(await authFetch(`/api/forecast?${params}`), "Forecast service unavailable");
 }
-export async function getEot20Tide(point: LocationPoint, spotType: string) {
-  const params = new URLSearchParams({ lat: String(point.latitude), lon: String(point.longitude), spotType, waterType: waterTypeForSpot(spotType) });
+export async function getEot20Tide(point: LocationPoint, spotType: string, request?: { startUtc: string; endUtc: string; intervalMinutes: number } | null) {
+  const params = new URLSearchParams({ lat: String(point.latitude), lon: String(point.longitude), spotType, waterType: waterTypeForSpot(spotType), timezone: point.timezone });
+  if (request) {
+    params.set("startUtc", request.startUtc);
+    params.set("endUtc", request.endUtc);
+    params.set("intervalMinutes", String(request.intervalMinutes));
+  }
   const result = await json<{ status: string; data: Eot20Model }>(await authFetch(`/api/tides/eot20?${params}`), "EOT20 model unavailable");
   return result.data;
 }

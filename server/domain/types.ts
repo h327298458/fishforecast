@@ -10,6 +10,7 @@ export type HourlyEnvironment = {
   waveDataStatus?: 'AVAILABLE'|'LOW_CONFIDENCE'|'NOT_APPLICABLE'|'UNAVAILABLE';
   modelSeaLevelTrendM: number | null;
   tideHeightM: number | null; tidePhase: 'rising'|'falling'|'slack'|null;
+  tideDataStatus?: 'AVAILABLE'|'PENDING'|'UNAVAILABLE'|'NOT_APPLICABLE';
   warningSeverity: 'none'|'minor'|'moderate'|'severe'|'unknown'; daylightState: 'day'|'night';
   sources: Record<string,string>; fetchedAtUtc: string;
   dataQuality: {

@@ -16,6 +16,7 @@ import {
 import {
   getAnalytics,
   getCurrentUser,
+  getEot20Tide,
   getForecast,
   getLogs,
   getSpotComparisons,
@@ -48,6 +49,8 @@ import { AccountSecurity } from "./components/AccountSecurity";
 import { SpotSafetySettings } from "./components/SpotSafetySettings";
 import { SpotComparisonTable } from "./components/SpotComparisonTable";
 import { TideSourceControl } from "./components/TideSourceControl";
+import { ForecastProgressPanel } from "./components/ForecastProgressPanel";
+import { createForecastProgress, updateForecastProgress, type ForecastProgress, type ForecastStageUpdate } from "./domain/forecastProgress";
 import "./styles.css";
 
 type View = "forecast" | "compare" | "logs" | "analytics" | "settings";
@@ -72,6 +75,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
     [method, setMethod] = useState("bottom_fishing"),
     [tideSource, setTideSource] = useState<TideSource>("BOM_OFFICIAL"),
     [loading, setLoading] = useState(true),
+    [progress, setProgress] = useState<ForecastProgress | null>(null),
     [error, setError] = useState(""),
     [modal, setModal] = useState(false),
     [toast, setToast] = useState(""),
@@ -84,31 +88,82 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
       number | boolean
     > | null>(null);
   const reverseRequest = useRef<AbortController | null>(null);
+  const loadSequence = useRef(0);
   async function signOut() { try { await logout(); } finally { onSignedOut(); } }
+  const updateProgress = useCallback((requestId: number, updates: ForecastStageUpdate[]) => {
+    setProgress((current) => current?.requestId === requestId ? updateForecastProgress(current, updates) : current);
+  }, []);
   const load = useCallback(
     async (
       target: LocationPoint,
-      type = spotType,
-      fishing = method,
-      source = tideSource,
+      type: string,
+      fishing: string,
+      source: TideSource,
     ) => {
+      const requestId = ++loadSequence.current;
       setLoading(true);
+      setForecast(null);
       setError("");
+      setDay(0);
+      setProgress(createForecastProgress(requestId));
       try {
-        setForecast(await getForecast(target, type, fishing, source));
-        setDay(0);
+        const baseForecast = await getForecast(target, type, fishing, source, true);
+        if (loadSequence.current !== requestId) return;
+        setForecast(baseForecast);
+        setLoading(false);
+        const officialAvailable = Boolean(baseForecast.tides.official?.events.length);
+        updateProgress(requestId, [
+          { id: "base", status: "completed", detail: "天气、风、Marine 与安全信息已可先查看" },
+          { id: "official", status: "completed", detail: officialAvailable ? `已匹配 ${baseForecast.tides.official?.station.name ?? "官方参考港"}` : "当前时段没有匹配到可用的官方潮汐事件" },
+        ]);
+        if (baseForecast.tides.calculationStatus !== "PENDING") {
+          updateProgress(requestId, [
+            { id: "eot20", status: "completed", detail: baseForecast.tides.actualTideSourceUsed === "EOT20_MODEL" ? "模型结果已从缓存或本次请求取得" : "当前评分来源不需要运行 EOT20" },
+            { id: "scoring", status: "completed", detail: "评分、图表和推荐窗口已完成" },
+          ]);
+          return;
+        }
+        updateProgress(requestId, [
+          { id: "eot20", status: "running", detail: "正在加载本地 NetCDF 模型并计算 7 天潮位" },
+          { id: "scoring", status: "pending", detail: "EOT20 完成后自动重算，不需要再次点击" },
+        ]);
+        try {
+          const model = await getEot20Tide(target, type, baseForecast.tides.model.request);
+          if (loadSequence.current !== requestId) return;
+          updateProgress(requestId, [
+            { id: "eot20", status: "completed", detail: model.cacheHit ? `EOT20 ${model.version} 已从缓存读取` : `EOT20 ${model.version} 本地计算完成` },
+            { id: "scoring", status: "running", detail: "正在应用潮汐并重算评分、曲线与全部窗口" },
+          ]);
+          const finalForecast = await getForecast(target, type, fishing, source, false);
+          if (loadSequence.current !== requestId) return;
+          setForecast(finalForecast);
+          setDay(0);
+          updateProgress(requestId, [
+            { id: "scoring", status: "completed", detail: "最终评分、潮汐曲线和推荐窗口已更新" },
+          ]);
+        } catch (modelError) {
+          if (loadSequence.current !== requestId) return;
+          updateProgress(requestId, [
+            { id: "eot20", status: "error", detail: modelError instanceof Error ? modelError.message : "EOT20 模型计算失败" },
+            { id: "scoring", status: "error", detail: "已保留天气与风浪结果；潮汐未被假数据替代" },
+          ]);
+        }
       } catch (e) {
+        if (loadSequence.current !== requestId) return;
         setForecast(null);
         setError(e instanceof Error ? e.message : "预测加载失败");
+        updateProgress(requestId, [{ id: "base", status: "error", detail: e instanceof Error ? e.message : "基础预测加载失败" }]);
       } finally {
-        setLoading(false);
+        if (loadSequence.current === requestId) setLoading(false);
       }
     },
-    [spotType, method, tideSource],
+    [updateProgress],
   );
   useEffect(() => {
+    let cancelled = false;
     getSpots()
-      .then(async (items) => {
+      .then((items) => {
+        if (cancelled) return;
         setSaved(items);
         if (items[0]) {
           const first = items[0];
@@ -117,18 +172,13 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
           setMethod(first.fishingMethod);
           const initialTideSource=first.preferredTideSource??"BOM_OFFICIAL";
           setTideSource(initialTideSource);
-          try {
-            setForecast(
-              await getForecast(first, first.spotType, first.fishingMethod,initialTideSource),
-            );
-          } catch (e) {
-            setError(e instanceof Error ? e.message : "预测加载失败");
-          }
-        }
+          void load(first, first.spotType, first.fishingMethod, initialTideSource);
+        } else setLoading(false);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "收藏读取失败"))
-      .finally(() => setLoading(false));
-  }, []);
+      .finally(() => { if (!cancelled && loadSequence.current === 0) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [load]);
   const select = useCallback(
     (next: LocationPoint, type = spotType, fishing = method) => {
       const nextSource='preferredTideSource' in next?(next as SavedSpot).preferredTideSource??tideSource:tideSource;
@@ -310,6 +360,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
           }))
       : current?.hours;
   const isSaved = Boolean(point && saved.some((item) => item.id === point.id));
+  const tideCalculationPending = forecast?.tides.calculationStatus === "PENDING";
   return (
     <div className="app">
       <header>
@@ -368,16 +419,15 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
           ) : view === "settings" ? (
             <SettingsView user={user} />
           ) : loading ? (
-            <div className="loading">
-              <LoaderCircle />
-              <b>正在获取真实天气、海洋和海平面数据…</b>
+            <div className="loading progressive-loading">
+              {progress ? <ForecastProgressPanel progress={progress} /> : <><LoaderCircle /><b>正在获取真实天气、海洋和安全数据…</b></>}
             </div>
           ) : error ? (
             <div className="loading error">
               <ShieldAlert />
               <b>{error}</b>
               {point ? (
-                <button onClick={() => void load(point)}>
+                <button onClick={() => void load(point, spotType, method, tideSource)}>
                   <RefreshCw />
                   重试
                 </button>
@@ -414,6 +464,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
                   </span>
                 </div>
               </div>
+              {progress ? <ForecastProgressPanel progress={progress} /> : null}
               <div className="forecast-controls">
                 <label>
                   钓点类型
@@ -421,7 +472,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
                     value={spotType}
                     onChange={(e) => {
                       setSpotType(e.target.value);
-                      void load(point, e.target.value, method);
+                      void load(point, e.target.value, method, tideSource);
                     }}
                   >
                     <option value="wharf">码头岸钓</option>
@@ -437,7 +488,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
                     value={method}
                     onChange={(e) => {
                       setMethod(e.target.value);
-                      void load(point, spotType, e.target.value);
+                      void load(point, spotType, e.target.value, tideSource);
                     }}
                   >
                     <option value="bottom_fishing">沉底钓</option>
@@ -472,6 +523,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
               <RecommendedWindows windows={current.windows} timezone={point.timezone} />
               <TideSourceControl
                 forecast={forecast}
+                busy={tideCalculationPending}
                 onSelect={(source) => void chooseTideSource(source)}
               />
               <ProviderStrip status={forecast.providerStatus} />
@@ -495,12 +547,15 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
                   </button>
                 ))}
               </div>
-              <TideChart
-                hours={tideChartHours ?? current.hours}
-                windows={current.windows}
-                timezone={point.timezone}
-              />
               <WindChart hours={current.hours} />
+              {tideCalculationPending ? (
+                <div className="tide-calculation-placeholder" role="status">
+                  <LoaderCircle className="spin" />
+                  <span><b>EOT20 潮汐正在后台计算</b><small>风、天气和当前可用窗口已先展示；完成后这里会自动替换为真实潮汐曲线并重算窗口。</small></span>
+                </div>
+              ) : (
+                <TideChart hours={tideChartHours ?? current.hours} windows={current.windows} timezone={point.timezone} />
+              )}
               <div className="factor-grid">
                 <article className="positive">
                   <h3>有利因素</h3>
@@ -591,7 +646,7 @@ function ProviderStrip({ status }: { status: Forecast["providerStatus"] }) {
   return (
     <div className="provider-strip">
       {Object.entries(status).map(([key, item]) => (
-        <span key={key} className={item.status === "available" ? "ok" : "warn"}>
+        <span key={key} className={item.status === "available" ? "ok" : item.status === "pending" ? "pending" : "warn"}>
           <b>{key}</b> {item.status}
           {item.reason ? ` · ${item.reason}` : ""}
         </span>

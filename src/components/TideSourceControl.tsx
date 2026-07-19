@@ -14,14 +14,20 @@ const fallbackLabel = (reason: string | null) => {
     return "已锁定的官方站当前无可用事件，系统没有自动改用其他来源。";
   if (reason === "OFFICIAL_TIDE_UNAVAILABLE_AND_EOT20_FALLBACK_FAILED")
     return "官方事件不可用，EOT20 自动回退计算也失败。";
+  if (reason === "OFFICIAL_TIDE_UNAVAILABLE_EOT20_PENDING")
+    return "附近官方潮汐事件不可用，正在自动计算 EOT20；完成后会自动用于本次评分。";
+  if (reason === "EOT20_CALCULATION_PENDING")
+    return "已选择 EOT20，模型正在后台计算；完成后会自动更新评分和曲线。";
   return reason ? `首选来源未采用：${reason}` : null;
 };
 
 export function TideSourceControl({
   forecast,
+  busy = false,
   onSelect,
 }: {
   forecast: Forecast;
+  busy?: boolean;
   onSelect: (source: TideSource) => void;
 }) {
   const officialAvailable = Boolean(forecast.tides.official?.events.length);
@@ -31,9 +37,11 @@ export function TideSourceControl({
   return (
     <section className="tide-source-control" aria-label="潮汐评分来源">
       <div className="tide-source-copy">
-        <strong>潮汐评分：{sourceLabel[actual]}</strong>
+        <strong>{busy ? "潮汐评分：EOT20 正在计算" : `潮汐评分：${sourceLabel[actual]}`}</strong>
         <small>
-          {actual === "NO_TIDE"
+          {busy
+            ? "已知天气、风浪与安全评分先展示，潮汐暂不计入；模型完成后自动重算。"
+            : actual === "NO_TIDE"
             ? "当前未把潮汐计入评分；有可用模型时可在这里直接切换。"
             : "曲线和评分只使用这一来源，不会把官方潮汐与模型简单平均。"}
         </small>
@@ -41,7 +49,7 @@ export function TideSourceControl({
       <div className="tide-source-actions">
         <button
           type="button"
-          disabled={!officialAvailable}
+          disabled={busy || !officialAvailable}
           aria-pressed={actual === "BOM_OFFICIAL"}
           className={actual === "BOM_OFFICIAL" ? "active" : ""}
           title={officialAvailable ? "使用官方参考港事件" : "当前没有覆盖查询时段的官方事件"}
@@ -51,7 +59,7 @@ export function TideSourceControl({
         </button>
         <button
           type="button"
-          disabled={!modelAvailable}
+          disabled={busy || !modelAvailable}
           aria-pressed={actual === "EOT20_MODEL"}
           className={actual === "EOT20_MODEL" ? "active" : ""}
           title={modelAvailable ? "使用本地 EOT20 经纬度模型" : "服务器未安装或无法运行 EOT20"}
