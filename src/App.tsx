@@ -90,6 +90,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
     [method, setMethod] = useState("bottom_fishing"),
     [tideSource, setTideSource] = useState<TideSource>("BOM_OFFICIAL"),
     [loading, setLoading] = useState(true),
+    [reassessing, setReassessing] = useState(false),
     [progress, setProgress] = useState<ForecastProgress | null>(null),
     [error, setError] = useState(""),
     [modal, setModal] = useState(false),
@@ -178,6 +179,33 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
     },
     [updateProgress],
   );
+  const reassess = useCallback(async (
+    target: LocationPoint,
+    type: string,
+    fishing: string,
+    source: TideSource,
+  ) => {
+    const requestId = ++loadSequence.current;
+    setReassessing(true);
+    setError("");
+    try {
+      const recalculated = await getForecast(target, type, fishing, source, false, true);
+      if (loadSequence.current !== requestId) return;
+      setForecast(recalculated);
+      setBaselineForecast(null);
+      setProgress((current) => current ? updateForecastProgress(current, [
+        { id: "base", status: "completed", detail: "优先复用同一坐标已获取的天气、实况与海况" },
+        { id: "official", status: "completed", detail: "复用当前坐标的官方参考港匹配" },
+        { id: "eot20", status: "completed", detail: "复用当前坐标和时段的潮汐模型缓存" },
+        { id: "scoring", status: "completed", detail: "钓点类型与钓法适用性已重新评估" },
+      ]) : current);
+    } catch (reassessmentError) {
+      if (loadSequence.current !== requestId) return;
+      setToast(reassessmentError instanceof Error ? reassessmentError.message : "适用性重新评估失败");
+    } finally {
+      if (loadSequence.current === requestId) setReassessing(false);
+    }
+  }, []);
   useEffect(() => {
     let cancelled = false;
     getSpots()
@@ -495,7 +523,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
                     value={spotType}
                     onChange={(e) => {
                       setSpotType(e.target.value);
-                      void load(point, e.target.value, method, tideSource);
+                      void reassess(point, e.target.value, method, tideSource);
                     }}
                   >
                     <option value="wharf">码头岸钓</option>
@@ -511,7 +539,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
                     value={method}
                     onChange={(e) => {
                       setMethod(e.target.value);
-                      void load(point, spotType, e.target.value, tideSource);
+                      void reassess(point, spotType, e.target.value, tideSource);
                     }}
                   >
                     <option value="bottom_fishing">沉底钓</option>
@@ -521,6 +549,16 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
                   </select>
                 </label>
               </div>
+              {reassessing ? (
+                <div className="reassessment-status" role="status">
+                  <LoaderCircle className="spin" />
+                  <span><b>正在重新评估适用性</b><small>优先沿用当前坐标的天气、潮汐、警告与实况，重算钓点类型、钓法和安全阈值。</small></span>
+                </div>
+              ) : forecast.evaluation?.mode === "REASSESSMENT" ? (
+                <div className="reassessment-status is-complete">
+                  <span><b>环境数据已复用</b><small>本次只更新适用性、钓法匹配和评分；仅在新类型需要此前未请求的数据时补取。</small></span>
+                </div>
+              ) : null}
               <h2>今天适合去吗？</h2>
               <div
                 className={`status ${best.score.safetyStatus.toLowerCase()}`}
@@ -546,6 +584,7 @@ function ForecastApp({ user, onSignedOut }: { user: AuthUser; onSignedOut: () =>
                 preferredSource={forecast.tides.preferredSource}
                 actualSource={forecast.tides.actualTideSourceUsed}
               />
+              <MethodSuitabilityExplanation score={best.score} method={method} reassessing={reassessing} />
               {best.score.confidenceReasons.length ? (
                 <p className="confidence-reasons">
                   <b>数据可信度依据：</b>{best.score.confidenceReasons.join("；")}
@@ -704,6 +743,20 @@ function RemoveSpotDialog({ spot, onCancel, onConfirm }: { spot: SavedSpot; onCa
         </div>
       </section>
     </div>
+  );
+}
+function MethodSuitabilityExplanation({ score, method, reassessing }: { score: Hour["score"]; method: string; reassessing: boolean }) {
+  const labels: Record<string, string> = { bottom_fishing: "沉底钓", lure: "路亚", float: "浮漂钓", surf_casting: "沙滩远投" };
+  const adjustment = score.methodAdjustmentPoints ?? 0;
+  return (
+    <section className={`method-suitability${reassessing ? " is-updating" : ""}`} aria-label="钓法适用性">
+      <div>
+        <strong>钓法适用性：{labels[method] ?? method}</strong>
+        <b>{score.methodSuitabilityScore ?? "—"}<small>/100</small></b>
+      </div>
+      <span>对鱼口环境评分修正：<b>{adjustment > 0 ? "+" : ""}{adjustment}</b></span>
+      <small>{reassessing ? "正在按新钓法重新评估…" : score.methodSuitabilityReason}</small>
+    </section>
   );
 }
 function TideScoreExplanation({

@@ -44,6 +44,7 @@ const baseSpot = {
   fishingMethod: "bottom_fishing",
   preferredTideSource: "BOM_OFFICIAL",
   deferEot20: false,
+  reassessOnly: false,
 };
 type Input = Partial<typeof baseSpot>;
 const canonicalTideSource = (value: unknown) =>
@@ -503,7 +504,7 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
         reasons: confidenceReasons,
       },
     };
-    return { ...env, score: scoreHour(env, spot.spotType, safetyProfile) };
+    return { ...env, score: scoreHour(env, spot.spotType, safetyProfile, spot.fishingMethod) };
   });
   const grouped = new Map<string, typeof hours>();
   for (const hour of hours) {
@@ -549,6 +550,13 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
   } : null;
   return {
     spot,
+    evaluation: {
+      mode: spot.reassessOnly ? "REASSESSMENT" : "FULL",
+      environmentCoordinatesFixed: true,
+      detail: spot.reassessOnly
+        ? "优先复用同一坐标和时段的Provider缓存，重新评估钓点类型、钓法、适用性与评分；新类型若需要此前未请求的数据则补取"
+        : "读取坐标对应环境数据并生成评分",
+    },
     days,
     astronomy: localAstronomy(point),
     rainfallContext:

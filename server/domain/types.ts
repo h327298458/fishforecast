@@ -35,6 +35,9 @@ export type ScoreResult = {
   tideContributionPoints: number | null;
   tideScoreReason: string | null;
   scoreStatus: 'PRELIMINARY_NO_TIDE'|'FINAL_WITH_TIDE'|'FINAL_NO_TIDE';
+  methodSuitabilityScore: number;
+  methodAdjustmentPoints: number;
+  methodSuitabilityReason: string;
   dataConfidenceScore: number;
   confidenceReasons: string[];
   positives: string[];

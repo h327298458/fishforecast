@@ -37,8 +37,8 @@ export async function searchLocations(query: string, focus?: { latitude: number;
 export async function reverseLocation(latitude: number, longitude: number, signal?: AbortSignal) {
   return (await json<{ data: LocationPoint | null }>(await fetch(`/api/geocode/reverse?lat=${latitude}&lon=${longitude}`, { signal }), "Reverse geocoding failed")).data;
 }
-export async function getForecast(point: LocationPoint, spotType: string, fishingMethod: string, preferredTideSource: TideSource = "BOM_OFFICIAL", deferEot20 = false) {
-  const params = new URLSearchParams({ spotId: point.id, lat: String(point.latitude), lon: String(point.longitude), name: point.name, address: point.address, state: point.state, timezone: point.timezone, spotType, waterType: waterTypeForSpot(spotType), fishingMethod, preferredTideSource, deferEot20: String(deferEot20) });
+export async function getForecast(point: LocationPoint, spotType: string, fishingMethod: string, preferredTideSource: TideSource = "BOM_OFFICIAL", deferEot20 = false, reassessOnly = false) {
+  const params = new URLSearchParams({ spotId: point.id, lat: String(point.latitude), lon: String(point.longitude), name: point.name, address: point.address, state: point.state, timezone: point.timezone, spotType, waterType: waterTypeForSpot(spotType), fishingMethod, preferredTideSource, deferEot20: String(deferEot20), reassessOnly: String(reassessOnly) });
   return json<Forecast>(await authFetch(`/api/forecast?${params}`), "Forecast service unavailable");
 }
 export async function getEot20Tide(point: LocationPoint, spotType: string, request?: { startUtc: string; endUtc: string; intervalMinutes: number } | null) {

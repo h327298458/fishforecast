@@ -4,12 +4,30 @@ import { haversineKm } from './bomOfficialTide.js';
 import { markHealth } from '../services/health.js';
 
 const fetchJson = async (url: URL,provider:string) => { const controller = new AbortController(); const timer=setTimeout(()=>controller.abort(),8000); try { const res=await fetch(url,{signal:controller.signal}); if(!res.ok) throw new Error(`provider ${res.status}`);const data=await res.json() as any;markHealth(provider,true);return data }catch(error){markHealth(provider,false,error);throw error}finally { clearTimeout(timer); } };
+type CacheEntry = { expiresAt: number; value: unknown };
+const responseCache = new Map<string, CacheEntry>();
+const inFlight = new Map<string, Promise<unknown>>();
+const cacheTtlMs = () => Math.max(5, Number(process.env.DATA_CACHE_MINUTES ?? 30)) * 60_000;
+export const clearOpenMeteoCache = () => { responseCache.clear(); inFlight.clear(); };
+async function cached<T>(key: string, load: () => Promise<T>): Promise<T> {
+  const hit = responseCache.get(key);
+  if (hit && hit.expiresAt > Date.now()) return hit.value as T;
+  const pending = inFlight.get(key);
+  if (pending) return pending as Promise<T>;
+  const request = load().then((value) => {
+    responseCache.set(key, { value, expiresAt: Date.now() + cacheTtlMs() });
+    return value;
+  }).finally(() => inFlight.delete(key));
+  inFlight.set(key, request);
+  return request;
+}
 export class OpenMeteoWeather implements WeatherForecastProvider {
   async getHourly(point: Coordinates, days: number, timezone: string) {
-    const url=new URL('https://api.open-meteo.com/v1/forecast'); url.search=new URLSearchParams({latitude:String(point.latitude),longitude:String(point.longitude),forecast_days:String(days),timezone:'UTC',hourly:'temperature_2m,apparent_temperature,relative_humidity_2m,precipitation_probability,precipitation,wind_speed_10m,wind_gusts_10m,wind_direction_10m,surface_pressure,cloud_cover,is_day'}).toString();
-    const d=await fetchJson(url,'weather'); const h=d.hourly;markHealth('solar',Array.isArray(h.is_day));return h.time.map((timestampUtc:string,i:number)=>({timestampUtc:new Date(timestampUtc+'Z').toISOString(),timestampLocal:new Intl.DateTimeFormat('sv-SE',{timeZone:timezone,dateStyle:'short',timeStyle:'short'}).format(new Date(timestampUtc+'Z')),timezone,temperatureC:h.temperature_2m[i]??null,apparentTemperatureC:h.apparent_temperature[i]??null,humidityPercent:h.relative_humidity_2m[i]??null,precipitationProbabilityPercent:h.precipitation_probability[i]??null,precipitationMm:h.precipitation[i]??null,windSpeedKmh:h.wind_speed_10m[i]??null,windGustKmh:h.wind_gusts_10m[i]??null,windDirectionDeg:h.wind_direction_10m[i]??null,pressureHpa:h.surface_pressure[i]??null,cloudCoverPercent:h.cloud_cover[i]??null,daylightState:h.is_day[i]===1?'day':'night',sources:{weather:'Open-Meteo'},fetchedAtUtc:new Date().toISOString()}));
+    const key=`weather:${point.latitude.toFixed(4)}:${point.longitude.toFixed(4)}:${days}:${timezone}`;
+    return cached(key,async()=>{const url=new URL('https://api.open-meteo.com/v1/forecast'); url.search=new URLSearchParams({latitude:String(point.latitude),longitude:String(point.longitude),forecast_days:String(days),timezone:'UTC',hourly:'temperature_2m,apparent_temperature,relative_humidity_2m,precipitation_probability,precipitation,wind_speed_10m,wind_gusts_10m,wind_direction_10m,surface_pressure,cloud_cover,is_day'}).toString();
+    const d=await fetchJson(url,'weather'); const h=d.hourly;markHealth('solar',Array.isArray(h.is_day));return h.time.map((timestampUtc:string,i:number)=>({timestampUtc:new Date(timestampUtc+'Z').toISOString(),timestampLocal:new Intl.DateTimeFormat('sv-SE',{timeZone:timezone,dateStyle:'short',timeStyle:'short'}).format(new Date(timestampUtc+'Z')),timezone,temperatureC:h.temperature_2m[i]??null,apparentTemperatureC:h.apparent_temperature[i]??null,humidityPercent:h.relative_humidity_2m[i]??null,precipitationProbabilityPercent:h.precipitation_probability[i]??null,precipitationMm:h.precipitation[i]??null,windSpeedKmh:h.wind_speed_10m[i]??null,windGustKmh:h.wind_gusts_10m[i]??null,windDirectionDeg:h.wind_direction_10m[i]??null,pressureHpa:h.surface_pressure[i]??null,cloudCoverPercent:h.cloud_cover[i]??null,daylightState:h.is_day[i]===1?'day':'night',sources:{weather:'Open-Meteo'},fetchedAtUtc:new Date().toISOString()}));});
   }
 }
 export class OpenMeteoMarine implements MarineForecastProvider {
-  async getHourly(point: Coordinates, days: number) { const url=new URL('https://marine-api.open-meteo.com/v1/marine'); url.search=new URLSearchParams({latitude:String(point.latitude),longitude:String(point.longitude),forecast_days:String(days),timezone:'UTC',cell_selection:'sea',hourly:'wave_height,swell_wave_height,swell_wave_period,sea_level_height_msl'}).toString(); const d=await fetchJson(url,'marine'); const h=d.hourly;const returnedPoint={latitude:Number(d.latitude),longitude:Number(d.longitude)},gridDistanceKm=haversineKm(point,returnedPoint);return h.time.map((timestampUtc:string,i:number)=>({timestampUtc:new Date(timestampUtc+'Z').toISOString(),waveHeightM:h.wave_height[i]??null,swellHeightM:h.swell_wave_height[i]??null,swellPeriodSeconds:h.swell_wave_period[i]??null,modelSeaLevelTrendM:h.sea_level_height_msl?.[i]??null,modelReturnedLatitude:returnedPoint.latitude,modelReturnedLongitude:returnedPoint.longitude,modelGridDistanceKm:gridDistanceKm,sources:{marine:'Open-Meteo Marine',modelSeaLevelTrend:'Open-Meteo sea_level_height_msl'},fetchedAtUtc:new Date().toISOString()})); }
+  async getHourly(point: Coordinates, days: number) { const key=`marine:${point.latitude.toFixed(4)}:${point.longitude.toFixed(4)}:${days}`;return cached(key,async()=>{const url=new URL('https://marine-api.open-meteo.com/v1/marine'); url.search=new URLSearchParams({latitude:String(point.latitude),longitude:String(point.longitude),forecast_days:String(days),timezone:'UTC',cell_selection:'sea',hourly:'wave_height,swell_wave_height,swell_wave_period,sea_level_height_msl'}).toString(); const d=await fetchJson(url,'marine'); const h=d.hourly;const returnedPoint={latitude:Number(d.latitude),longitude:Number(d.longitude)},gridDistanceKm=haversineKm(point,returnedPoint);return h.time.map((timestampUtc:string,i:number)=>({timestampUtc:new Date(timestampUtc+'Z').toISOString(),waveHeightM:h.wave_height[i]??null,swellHeightM:h.swell_wave_height[i]??null,swellPeriodSeconds:h.swell_wave_period[i]??null,modelSeaLevelTrendM:h.sea_level_height_msl?.[i]??null,modelReturnedLatitude:returnedPoint.latitude,modelReturnedLongitude:returnedPoint.longitude,modelGridDistanceKm:gridDistanceKm,sources:{marine:'Open-Meteo Marine',modelSeaLevelTrend:'Open-Meteo sea_level_height_msl'},fetchedAtUtc:new Date().toISOString()}));}); }
 }

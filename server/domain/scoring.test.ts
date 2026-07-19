@@ -1,4 +1,4 @@
-import { describe,expect,it } from 'vitest'; import { angularDifference, mergeWindows, scoreHour, scoreTideCondition, weightedScore } from './scoring.js'; import type { HourlyEnvironment } from './types.js';
+import { describe,expect,it } from 'vitest'; import { angularDifference, mergeWindows, scoreHour, scoreMethodSuitability, scoreTideCondition, weightedScore } from './scoring.js'; import type { HourlyEnvironment } from './types.js';
 const env:HourlyEnvironment={timestampUtc:'2026-01-01T00:00:00Z',timestampLocal:'2026-01-01 11:00',timezone:'Australia/Sydney',temperatureC:20,apparentTemperatureC:20,humidityPercent:60,precipitationProbabilityPercent:10,precipitationMm:0,windSpeedKmh:10,windGustKmh:18,windDirectionDeg:200,pressureHpa:1016,pressureTrendHpa3h:0,cloudCoverPercent:20,waveHeightM:1,swellHeightM:.7,swellPeriodSeconds:8,modelSeaLevelTrendM:.1,tideHeightM:1.2,tidePhase:'rising',warningSeverity:'none',daylightState:'day',sources:{},fetchedAtUtc:'2026-01-01T00:00:00Z',dataQuality:{weather:.9,marine:.8,tide:.8,warnings:.8,overall:.84}};
 describe('scoring',()=>{it('renormalises missing weights',()=>expect(weightedScore([{value:80,weight:.4},{value:null,weight:.6}])).toBe(80));it('handles direction wrap',()=>expect(angularDifference(350,10)).toBe(20));it('hard-blocks severe warnings',()=>expect(scoreHour({...env,warningSeverity:'severe'}).safetyStatus).toBe('NOT_RECOMMENDED'));it('caps safety when official warnings are unknown',()=>{const score=scoreHour({...env,warningSeverity:'unknown'});expect(score.safetyStatus).toBe('UNKNOWN');expect(score.safetyScore).toBeLessThanOrEqual(60)});it('reduces confidence without pretending missing is ideal',()=>{const r=scoreHour({...env,tideHeightM:null,tidePhase:null,dataQuality:{...env.dataQuality,overall:.52}});expect(r.dataConfidenceScore).toBe(52);expect(r.missing).toContain('tide')});it('merges two safe adjacent hours',()=>{const score=scoreHour(env);expect(mergeWindows([{timestampUtc:'a',score},{timestampUtc:'b',score}])).toHaveLength(1)})});
 describe('confidence evidence',()=>{it('passes forecast confidence reasons through to the user-visible score',()=>{const score=scoreHour({...env,dataQuality:{...env.dataQuality,overall:.73,reasons:['BOM official warnings checked','No usable tide source']}});expect(score.dataConfidenceScore).toBe(73);expect(score.confidenceReasons).toEqual(['BOM official warnings checked','No usable tide source']);})});
@@ -85,4 +85,31 @@ it('scores an exposed headwind more conservatively than a sheltered spot',()=>{
 
 it('honours a user gust limit as a hard safety block',()=>{
   expect(scoreHour({...env,windGustKmh:36},'wharf',{maximumGustKmh:35}).safetyStatus).toBe('NOT_RECOMMENDED');
+});
+
+it('re-evaluates fishing-method suitability without changing the measured environment',()=>{
+  const windy={...env,windSpeedKmh:22,windGustKmh:35,waveHeightM:1.4};
+  const surf=scoreHour(windy,'beach',{},'surf_casting');
+  const float=scoreHour(windy,'beach',{},'float');
+  expect(surf.methodSuitabilityScore).toBeGreaterThan(float.methodSuitabilityScore);
+  expect(surf.fishingConditionScore).toBeGreaterThan(float.fishingConditionScore);
+  expect(float.methodAdjustmentPoints).toBeLessThan(0);
+  expect(float.methodSuitabilityReason).toContain('浮漂钓');
+  expect(windy.windSpeedKmh).toBe(22);
+});
+
+it('keeps the method adjustment deliberately modest and separately explainable',()=>{
+  const result=scoreMethodSuitability({...env,windSpeedKmh:35,windGustKmh:50},35,50,'lure');
+  expect(result.adjustment).toBeGreaterThanOrEqual(-6);
+  expect(result.adjustment).toBeLessThanOrEqual(4);
+  expect(result.reason).toContain('路亚');
+});
+
+it('uses spot-type compatibility and caps confidence when relevant wave evidence is absent',()=>{
+  const noWave={...env,waveHeightM:null};
+  const beach=scoreMethodSuitability(noWave,10,18,'surf_casting','beach');
+  const wharf=scoreMethodSuitability(noWave,10,18,'surf_casting','wharf');
+  expect(beach.score).toBeGreaterThan(wharf.score);
+  expect(beach.score).toBeLessThanOrEqual(85);
+  expect(beach.reason).toContain('缺少适用于该水域的浪况');
 });

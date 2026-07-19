@@ -42,6 +42,9 @@ export type Score = {
   tideContributionPoints: number | null;
   tideScoreReason: string | null;
   scoreStatus: "PRELIMINARY_NO_TIDE" | "FINAL_WITH_TIDE" | "FINAL_NO_TIDE";
+  methodSuitabilityScore: number;
+  methodAdjustmentPoints: number;
+  methodSuitabilityReason: string;
   dataConfidenceScore: number;
   confidenceReasons: string[];
   positives: string[];
@@ -125,6 +128,7 @@ export type Forecast = {
   providerStatus: Record<string, ProviderState>;
   degraded: boolean;
   generatedAtUtc: string;
+  evaluation?: { mode: "FULL" | "REASSESSMENT"; environmentCoordinatesFixed: boolean; detail: string };
   tides: {
     calculationStatus?: "PENDING" | "COMPLETE";
     selectedSource: TideSource;

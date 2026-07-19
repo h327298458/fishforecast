@@ -1,6 +1,6 @@
 import type { HourlyEnvironment, ScoreResult, SafetyStatus } from "./types.js";
 
-export const RULE_VERSION = "2026.07-tide-explain.5";
+export const RULE_VERSION = "2026.07-context-method.6";
 const clamp = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
 export const angularDifference = (a: number, b: number) => Math.abs(((a - b + 540) % 360) - 180);
 export const weightedScore = (items: Array<{ value: number | null; weight: number }>) => {
@@ -9,6 +9,56 @@ export const weightedScore = (items: Array<{ value: number | null; weight: numbe
   return weight ? usable.reduce((sum, item) => sum + item.value * item.weight, 0) / weight : 0;
 };
 const inverseLinear = (value: number | null, ideal: number, bad: number) => value === null ? null : clamp(100 - Math.max(0, value - ideal) * (100 / Math.max(bad - ideal, 1)));
+
+export function scoreMethodSuitability(env: HourlyEnvironment, evaluatedWind: number | null, evaluatedGust: number | null, fishingMethod = "bottom_fishing", spotType = "wharf") {
+  const daylight = env.daylightState === "day" ? 78 : 64;
+  const spotLabels: Record<string,string> = { wharf: "码头", rock: "岩岸", beach: "沙滩", estuary: "河口", freshwater: "淡水" };
+  const compatibility: Record<string,Record<string,number>> = {
+    bottom_fishing: { wharf: 88, rock: 76, beach: 80, estuary: 88, freshwater: 84 },
+    lure: { wharf: 78, rock: 84, beach: 76, estuary: 90, freshwater: 90 },
+    float: { wharf: 90, rock: 62, beach: 54, estuary: 92, freshwater: 88 },
+    surf_casting: { wharf: 34, rock: 46, beach: 94, estuary: 44, freshwater: 20 },
+  };
+  const spotCompatibility = (compatibility[fishingMethod] ?? compatibility.bottom_fishing)[spotType] ?? 70;
+  const configurations: Record<string,{label:string;usesWave:boolean;items:Array<{value:number|null;weight:number}>}> = {
+    bottom_fishing: { label: "沉底钓", usesWave: true, items: [
+      { value: inverseLinear(evaluatedWind, 14, 42), weight: .32 },
+      { value: inverseLinear(evaluatedGust, 24, 55), weight: .23 },
+      { value: inverseLinear(env.waveHeightM, 1.2, 3), weight: .2 },
+      { value: spotCompatibility, weight: .25 },
+    ] },
+    lure: { label: "路亚", usesWave: false, items: [
+      { value: inverseLinear(evaluatedWind, 10, 32), weight: .35 },
+      { value: inverseLinear(evaluatedGust, 18, 45), weight: .22 },
+      { value: daylight, weight: .18 },
+      { value: spotCompatibility, weight: .25 },
+    ] },
+    float: { label: "浮漂钓", usesWave: true, items: [
+      { value: inverseLinear(evaluatedWind, 8, 26), weight: .32 },
+      { value: inverseLinear(evaluatedGust, 14, 36), weight: .2 },
+      { value: inverseLinear(env.waveHeightM, .6, 1.8), weight: .23 },
+      { value: spotCompatibility, weight: .25 },
+    ] },
+    surf_casting: { label: "沙滩远投", usesWave: true, items: [
+      { value: inverseLinear(evaluatedWind, 18, 45), weight: .3 },
+      { value: inverseLinear(evaluatedGust, 28, 60), weight: .2 },
+      { value: inverseLinear(env.waveHeightM, 1.3, 3), weight: .25 },
+      { value: spotCompatibility, weight: .25 },
+    ] },
+  };
+  const configuration = configurations[fishingMethod] ?? configurations.bottom_fishing;
+  const waveEvidenceMissing = configuration.usesWave && env.waveHeightM === null;
+  const score = Math.min(waveEvidenceMissing ? 85 : 100, clamp(weightedScore(configuration.items)));
+  const adjustment = Math.max(-6, Math.min(4, Math.round((score - 70) / 7)));
+  const conditionLabel = waveEvidenceMissing ? "当前可用风况" : "当前风浪条件";
+  const caveat = waveEvidenceMissing ? "；缺少适用于该水域的浪况，适配分已限制上限" : "";
+  const reason = adjustment >= 2
+    ? `${configuration.label}在${spotLabels[spotType] ?? spotType}与${conditionLabel}较匹配${caveat}`
+    : adjustment <= -2
+      ? `${configuration.label}在${spotLabels[spotType] ?? spotType}受${conditionLabel}限制${caveat}`
+      : `${configuration.label}在${spotLabels[spotType] ?? spotType}的当前适用性一般${caveat}`;
+  return { score, adjustment, reason, label: configuration.label };
+}
 
 export function scoreTideCondition(env: HourlyEnvironment) {
   if (env.tidePhase === null) return null;
@@ -48,7 +98,7 @@ export type SpotSafetyProfile = {
   sheltered?: boolean;
 };
 
-export function scoreHour(env: HourlyEnvironment, spotType = "wharf", profile: SpotSafetyProfile = {}): ScoreResult {
+export function scoreHour(env: HourlyEnvironment, spotType = "wharf", profile: SpotSafetyProfile = {}, fishingMethod = "bottom_fishing"): ScoreResult {
   const waveIsDeliberatelyExcluded = env.waveDataStatus === "LOW_CONFIDENCE" || env.waveDataStatus === "NOT_APPLICABLE";
   const tideIsPending = env.tideDataStatus === "PENDING";
   const missing = Object.entries({ wind: env.windSpeedKmh, gust: env.windGustKmh, pressure: env.pressureHpa, tide: tideIsPending ? 0 : env.tideHeightM, wave: waveIsDeliberatelyExcluded ? 0 : env.waveHeightM }).filter(([, value]) => value === null).map(([key]) => key);
@@ -77,11 +127,12 @@ export function scoreHour(env: HourlyEnvironment, spotType = "wharf", profile: S
     { value: inverseLinear(env.precipitationProbabilityPercent, 15, 90), weight: 0.25 },
     { value: env.apparentTemperatureC === null ? null : clamp(100 - Math.abs(env.apparentTemperatureC - 20) * 6), weight: 0.35 },
   ]);
+  const methodSuitability = scoreMethodSuitability(env, evaluatedWind, evaluatedGust, fishingMethod, spotType);
   const baselineFishingConditionScore = clamp(weightedScore([
     { value: inverseLinear(evaluatedWind, 8, 40), weight: 0.25 },
     { value: env.pressureHpa === null ? null : clamp(75 - Math.abs(env.pressureHpa - 1016) * 2), weight: 0.2 },
     { value: env.daylightState === "day" ? 72 : 60, weight: 0.2 },
-  ]));
+  ]) + methodSuitability.adjustment);
   const tideCondition = scoreTideCondition(env);
   const fishingConditionScore = tideCondition
     ? clamp(weightedScore([
@@ -89,15 +140,15 @@ export function scoreHour(env: HourlyEnvironment, spotType = "wharf", profile: S
         { value: env.pressureHpa === null ? null : clamp(75 - Math.abs(env.pressureHpa - 1016) * 2), weight: 0.2 },
         { value: tideCondition.score, weight: 0.35 },
         { value: env.daylightState === "day" ? 72 : 60, weight: 0.2 },
-      ]))
+      ]) + methodSuitability.adjustment)
     : baselineFishingConditionScore;
   const scoreStatus: ScoreResult["scoreStatus"] = tideCondition
     ? "FINAL_WITH_TIDE"
     : tideIsPending
       ? "PRELIMINARY_NO_TIDE"
       : "FINAL_NO_TIDE";
-  const positives = [env.tidePhase === "rising" ? "潮位处于上升阶段" : "", (evaluatedWind ?? 99) < 20 ? "平均风速较温和" : "", exposureMultiplier < 1 ? "钓点对当前风向有遮挡" : "", (env.pressureHpa ?? 0) >= 1012 ? "气压处于稳定区间" : ""].filter(Boolean);
-  const negatives = [(evaluatedGust ?? 0) > 30 ? "阵风可能影响抛投与舒适度" : "", exposureMultiplier > 1 ? "当前风向正对钓点暴露方向" : "", env.warningSeverity === "unknown" ? "官方警告状态暂时无法核实" : "", missing.length ? `缺少 ${missing.join("、")} 数据` : ""].filter(Boolean);
+  const positives = [env.tidePhase === "rising" ? "潮位处于上升阶段" : "", (evaluatedWind ?? 99) < 20 ? "平均风速较温和" : "", exposureMultiplier < 1 ? "钓点对当前风向有遮挡" : "", (env.pressureHpa ?? 0) >= 1012 ? "气压处于稳定区间" : "", methodSuitability.adjustment >= 2 ? methodSuitability.reason : ""].filter(Boolean);
+  const negatives = [(evaluatedGust ?? 0) > 30 ? "阵风可能影响抛投与舒适度" : "", exposureMultiplier > 1 ? "当前风向正对钓点暴露方向" : "", env.warningSeverity === "unknown" ? "官方警告状态暂时无法核实" : "", methodSuitability.adjustment <= -2 ? methodSuitability.reason : "", missing.length ? `缺少 ${missing.join("、")} 数据` : ""].filter(Boolean);
   return {
     safetyStatus,
     safetyScore: clamp(safetyScore),
@@ -108,6 +159,9 @@ export function scoreHour(env: HourlyEnvironment, spotType = "wharf", profile: S
     tideContributionPoints: tideCondition ? fishingConditionScore - baselineFishingConditionScore : null,
     tideScoreReason: tideCondition?.reason ?? null,
     scoreStatus,
+    methodSuitabilityScore: methodSuitability.score,
+    methodAdjustmentPoints: methodSuitability.adjustment,
+    methodSuitabilityReason: methodSuitability.reason,
     dataConfidenceScore: clamp(env.dataQuality.overall * 100),
     confidenceReasons: env.dataQuality.reasons ?? [],
     positives,

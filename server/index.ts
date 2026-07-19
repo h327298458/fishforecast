@@ -215,6 +215,7 @@ app.get("/api/geocode/reverse", async (req, reply) => {
 app.get("/api/forecast", async (req, reply) => {
   const q = req.query as Record<string, string>;
   const deferEot20 = q.deferEot20 === "true";
+  const reassessOnly = q.reassessOnly === "true";
   const latitude = Number(q.lat),
     longitude = Number(q.lon);
   if (!Number.isFinite(latitude) || !inAustralia(latitude, longitude))
@@ -242,6 +243,7 @@ app.get("/api/forecast", async (req, reply) => {
       fishingMethod: q.fishingMethod ?? "bottom_fishing",
       preferredTideSource: q.preferredTideSource ?? "BOM_OFFICIAL",
       deferEot20,
+      reassessOnly,
     },
     db,
   );

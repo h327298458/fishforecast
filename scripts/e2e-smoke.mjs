@@ -19,24 +19,37 @@ async function waitForServer() {
 }
 
 const point = { id: "draft-bondi", name: "Bondi Beach", address: "Bondi Beach NSW 2026, Australia", latitude: -33.8915, longitude: 151.2767, state: "NSW", timezone: "Australia/Sydney", countryCode: "AU" };
+const forecastRequests = [];
+const eot20Requests = [];
 const forecast = (url) => {
   const params = new URL(url).searchParams;
   const source = params.get("preferredTideSource") ?? "BOM_OFFICIAL";
+  const fishingMethod = params.get("fishingMethod") ?? "bottom_fishing";
+  const spotType = params.get("spotType") ?? "beach";
+  const reassessOnly = params.get("reassessOnly") === "true";
   const pending = params.get("deferEot20") === "true" && source !== "NO_TIDE";
   const actualSource = pending ? "NO_TIDE" : source === "BOM_OFFICIAL" ? "EOT20_MODEL" : source;
   const timestamp = new Date(); timestamp.setUTCMinutes(0, 0, 0);
   const tideApplied = actualSource !== "NO_TIDE";
-  const score = { safetyStatus: "SAFE", safetyScore: 83, comfortScore: 78, fishingConditionScore: tideApplied ? 79 : 76, baselineFishingConditionScore: 76, tideConditionScore: tideApplied ? 82 : null, tideContributionPoints: tideApplied ? 3 : null, tideScoreReason: tideApplied ? "涨潮；变化 0.28 m/h；距最近高低潮约 90 分钟" : null, scoreStatus: tideApplied ? "FINAL_WITH_TIDE" : pending ? "PRELIMINARY_NO_TIDE" : "FINAL_NO_TIDE", dataConfidenceScore: 81, confidenceReasons: ["E2E fixture"], positives: ["平均风速较温和"], negatives: [], missing: [], ruleVersion: "e2e" };
+  const methodFixture = {
+    bottom_fishing: { score: 78, adjustment: 1, reason: "沉底钓对当前条件适应性一般" },
+    lure: { score: 66, adjustment: -1, reason: "路亚对当前条件适应性一般" },
+    float: { score: 48, adjustment: -3, reason: "浮漂钓受当前风浪条件限制" },
+    surf_casting: { score: 86, adjustment: 2, reason: "沙滩远投与当前风浪条件较匹配" },
+  }[fishingMethod] ?? { score: 70, adjustment: 0, reason: "当前钓法适用性一般" };
+  const baselineScore = 75 + methodFixture.adjustment;
+  const finalScore = baselineScore + (tideApplied ? 3 : 0);
+  const score = { safetyStatus: "SAFE", safetyScore: 83, comfortScore: 78, fishingConditionScore: finalScore, baselineFishingConditionScore: baselineScore, tideConditionScore: tideApplied ? 82 : null, tideContributionPoints: tideApplied ? 3 : null, tideScoreReason: tideApplied ? "涨潮；变化 0.28 m/h；距最近高低潮约 90 分钟" : null, scoreStatus: tideApplied ? "FINAL_WITH_TIDE" : pending ? "PRELIMINARY_NO_TIDE" : "FINAL_NO_TIDE", methodSuitabilityScore: methodFixture.score, methodAdjustmentPoints: methodFixture.adjustment, methodSuitabilityReason: methodFixture.reason, dataConfidenceScore: 81, confidenceReasons: ["E2E fixture"], positives: ["平均风速较温和"], negatives: methodFixture.adjustment <= -2 ? [methodFixture.reason] : [], missing: [], ruleVersion: "e2e" };
   const windowFixture = (startUtc, endUtc, averageScore, rating = "GOOD") => ({ startUtc, endUtc, durationHours: 3, averageScore, averageSafetyScore: 83, averageComfortScore: 78, averageConfidenceScore: 81, minimumConfidenceScore: 81, rating, ratingLabel: rating === "PRIORITY" ? "优先考虑" : "条件较好", summary: "各项达到推荐门槛，可作为本日备选出钓时段。", reasons: ["平均风速较温和"], cautions: [] });
   const hours = Array.from({ length: 24 }, (_, index) => ({ timestampUtc: new Date(timestamp.getTime() + index * 3_600_000).toISOString(), timestampLocal: new Date(timestamp.getTime() + index * 3_600_000).toISOString().slice(0, 19), temperatureC: 21, precipitationProbabilityPercent: 5, windSpeedKmh: 12, windGustKmh: 18, windDirectionDeg: 90, pressureHpa: 1016, waveHeightM: 1.1, swellPeriodSeconds: 9, modelSeaLevelTrendM: .1, tideHeightM: actualSource === "NO_TIDE" ? null : Math.sin(index / 2) * .7, tidePhase: actualSource === "NO_TIDE" ? null : "rising", tideChangeRateMPerHour: tideApplied ? .28 : null, minutesToNearestTideEvent: tideApplied ? 90 : null, nearestTideEventType: tideApplied ? "HIGH" : null, minutesToNextTideEvent: tideApplied ? 90 : null, nextTideEventType: tideApplied ? "HIGH" : null, tideDataStatus: pending ? "PENDING" : "AVAILABLE", warningSeverity: "none", sources: {}, score }));
-  return { snapshotId: null, spot: { ...point, spotType: "beach", fishingMethod: "bottom_fishing", waterType: "coastal", preferredTideSource: source }, generatedAtUtc: new Date().toISOString(), degraded: false, providerStatus: { weather: { status: "available", provider: "Open-Meteo" }, marine: { status: "available", provider: "Open-Meteo Marine" }, officialTide: { status: "unavailable", provider: "BOM" }, eot20: { status: pending ? "pending" : "available", provider: "EOT20" }, warnings: { status: "available", provider: "BOM" } }, days: [{ date: timestamp.toISOString().slice(0, 10), hours, windows: [windowFixture(hours[1].timestampUtc, hours[4].timestampUtc, 76, "PRIORITY"), windowFixture(hours[14].timestampUtc, hours[17].timestampUtc, 74)] }], tides: { calculationStatus: pending ? "PENDING" : "COMPLETE", selectedSource: actualSource, preferredSource: source, actualTideSourceUsed: actualSource, fallbackReason: pending ? "OFFICIAL_TIDE_UNAVAILABLE_EOT20_PENDING" : source === "BOM_OFFICIAL" ? "OFFICIAL_TIDE_UNAVAILABLE_AUTO_EOT20" : null, official: null, model: pending ? { status: "PENDING", available: true, version: "EOT20-test", applicability: "APPLICABLE", events: [], request: { startUtc: new Date(timestamp.getTime() - 86_400_000).toISOString(), endUtc: new Date(timestamp.getTime() + 7 * 86_400_000).toISOString(), intervalMinutes: 60 } } : { status: "available", available: true, version: "EOT20-test", applicability: "APPLICABLE", events: [{ type: "HIGH", timestampUtc: hours[3].timestampUtc, heightM: 1.2 }] }, comparison: null }, warnings: { status: "CLEAR", warnings: [] }, observation: {}, bomMarineForecast: { status: "available" }, nswMhlWave: { status: "available", applicability: "APPLICABLE" }, waterData: { status: "NOT_APPLICABLE" }, marineApplicability: { status: "APPLICABLE", confidence: .85, gridDistanceKm: .5, requestedCoordinates: { latitude: point.latitude, longitude: point.longitude }, returnedCoordinates: { latitude: point.latitude, longitude: point.longitude } }, rainfallContext: { status: "available" }, regulations: { status: "REAL", state: "NSW", officialLinks: [], notice: "test" } };
+  return { snapshotId: null, spot: { ...point, spotType, fishingMethod, waterType: spotType === "freshwater" ? "freshwater" : "coastal", preferredTideSource: source }, evaluation: { mode: reassessOnly ? "REASSESSMENT" : "FULL", environmentCoordinatesFixed: true, detail: "E2E fixture" }, generatedAtUtc: new Date().toISOString(), degraded: false, providerStatus: { weather: { status: "available", provider: "Open-Meteo" }, marine: { status: "available", provider: "Open-Meteo Marine" }, officialTide: { status: "unavailable", provider: "BOM" }, eot20: { status: pending ? "pending" : "available", provider: "EOT20" }, warnings: { status: "available", provider: "BOM" } }, days: [{ date: timestamp.toISOString().slice(0, 10), hours, windows: [windowFixture(hours[1].timestampUtc, hours[4].timestampUtc, finalScore, "PRIORITY"), windowFixture(hours[14].timestampUtc, hours[17].timestampUtc, finalScore - 2)] }], tides: { calculationStatus: pending ? "PENDING" : "COMPLETE", selectedSource: actualSource, preferredSource: source, actualTideSourceUsed: actualSource, fallbackReason: pending ? "OFFICIAL_TIDE_UNAVAILABLE_EOT20_PENDING" : source === "BOM_OFFICIAL" ? "OFFICIAL_TIDE_UNAVAILABLE_AUTO_EOT20" : null, official: null, model: pending ? { status: "PENDING", available: true, version: "EOT20-test", applicability: "APPLICABLE", events: [], request: { startUtc: new Date(timestamp.getTime() - 86_400_000).toISOString(), endUtc: new Date(timestamp.getTime() + 7 * 86_400_000).toISOString(), intervalMinutes: 60 } } : { status: "available", available: true, version: "EOT20-test", applicability: "APPLICABLE", events: [{ type: "HIGH", timestampUtc: hours[3].timestampUtc, heightM: 1.2 }] }, comparison: null }, warnings: { status: "CLEAR", warnings: [] }, observation: {}, bomMarineForecast: { status: "available" }, nswMhlWave: { status: "available", applicability: "APPLICABLE" }, waterData: { status: "NOT_APPLICABLE" }, marineApplicability: { status: "APPLICABLE", confidence: .85, gridDistanceKm: .5, requestedCoordinates: { latitude: point.latitude, longitude: point.longitude }, returnedCoordinates: { latitude: point.latitude, longitude: point.longitude } }, rainfallContext: { status: "available" }, regulations: { status: "REAL", state: "NSW", officialLinks: [], notice: "test" } };
 };
 
 async function configureRoutes(page) {
   await page.route("**/api/geocode/search?**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ data: [point] }) }));
   await page.route("**/api/geocode/reverse?**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ data: point }) }));
-  await page.route("**/api/forecast?**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(forecast(route.request().url())) }));
-  await page.route("**/api/tides/eot20?**", async (route) => { await new Promise((resolve) => setTimeout(resolve, 1_200)); await route.fulfill({ contentType: "application/json", body: JSON.stringify({ status: "available", data: { model: "EOT20", version: "test", applicability: "APPLICABLE", confidence: .8, calculationCoordinates: { latitude: point.latitude, longitude: point.longitude }, values: [], dailyRanges: [], events: [{ type: "HIGH", timestampUtc: new Date().toISOString(), timestampLocal: new Date().toISOString(), heightM: 1.2 }] } }) }); });
+  await page.route("**/api/forecast?**", (route) => { forecastRequests.push(route.request().url()); return route.fulfill({ contentType: "application/json", body: JSON.stringify(forecast(route.request().url())) }); });
+  await page.route("**/api/tides/eot20?**", async (route) => { eot20Requests.push(route.request().url()); await new Promise((resolve) => setTimeout(resolve, 1_200)); await route.fulfill({ contentType: "application/json", body: JSON.stringify({ status: "available", data: { model: "EOT20", version: "test", applicability: "APPLICABLE", confidence: .8, calculationCoordinates: { latitude: point.latitude, longitude: point.longitude }, values: [], dailyRanges: [], events: [{ type: "HIGH", timestampUtc: new Date().toISOString(), timestampLocal: new Date().toISOString(), heightM: 1.2 }] } }) }); });
 }
 
 async function login(page) {
@@ -75,6 +88,17 @@ try {
   if ((await page.locator(".tide-source-control button.active").innerText()) !== "EOT20 模型") throw new Error("AUTO_EOT20_SOURCE_NOT_VISIBLE");
   const drawnWindowLabels = (await page.locator(".chart svg text").allTextContents()).filter((value) => value.startsWith("窗口"));
   if (drawnWindowLabels.length !== 2) throw new Error(`ALL_WINDOWS_NOT_DRAWN:${JSON.stringify(drawnWindowLabels)}`);
+  const forecastsBeforeMethodChange = forecastRequests.length;
+  const eot20BeforeMethodChange = eot20Requests.length;
+  await page.locator("label").filter({ hasText: "钓法" }).locator("select").selectOption("float");
+  await page.getByText("环境数据已复用", { exact: true }).waitFor();
+  await page.locator(".method-suitability").getByText("钓法适用性：浮漂钓", { exact: true }).waitFor();
+  const methodText = await page.locator(".method-suitability").innerText();
+  if (!methodText.includes("48/100") || !methodText.includes("修正：-3") || !methodText.includes("受当前风浪条件限制")) throw new Error(`METHOD_SUITABILITY_NOT_EXPLAINED:${methodText}`);
+  if (forecastRequests.length !== forecastsBeforeMethodChange + 1) throw new Error(`METHOD_CHANGE_TRIGGERED_FULL_PIPELINE:${forecastRequests.length - forecastsBeforeMethodChange}`);
+  const reassessmentUrl = new URL(forecastRequests.at(-1));
+  if (reassessmentUrl.searchParams.get("reassessOnly") !== "true" || reassessmentUrl.searchParams.get("deferEot20") !== "false") throw new Error(`METHOD_CHANGE_NOT_REASSESSMENT:${reassessmentUrl}`);
+  if (eot20Requests.length !== eot20BeforeMethodChange) throw new Error("METHOD_CHANGE_RESTARTED_EOT20");
   await page.locator(".footer-actions button").first().click();
   await page.locator(".spot-list button").waitFor();
   await page.locator(".footer-actions .primary").click();
@@ -106,7 +130,7 @@ try {
     if (overflow) throw new Error(`HORIZONTAL_OVERFLOW_${scenario.name.toUpperCase()}`);
     await mobile.close();
   }
-  process.stdout.write("E2E PASS: search/save/cancel-favorite with history preserved + progressive tides + geolocation success/denied/timeout + 390x844 and 430x932\n");
+  process.stdout.write("E2E PASS: search/save/cancel-favorite with history preserved + progressive tides + cached method reassessment without EOT20 restart + geolocation success/denied/timeout + 390x844 and 430x932\n");
 } finally {
   await browser?.close();
   if (server.exitCode === null) {
