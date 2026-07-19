@@ -6,6 +6,10 @@ being overwritten.
 
 The image installs the validated `eo-tides==0.10.4` Python runtime. EOT20 model
 data is not copied into the image or Git; it is mounted read-only at `/models`.
+The image keeps the real `eo-tides.model` and `pyTMD` calculation stack, but
+does not install unrelated satellite STAC, Dask-distributed, Arrow, plotting or
+machine-learning extras. This is important on small disks: none of those
+packages are used by TideLine's single-coordinate tide worker.
 The mounted host directory must contain:
 
 ```text
@@ -38,6 +42,17 @@ docker compose --env-file .env.server \
   -f deploy/compose.server.yml \
   -f deploy/compose.low-memory.yml \
   up -d
+```
+
+If a previous build failed with `no space left on device`, clean only unused
+Docker build/image data first. Do not prune volumes because the named volume
+contains SQLite data:
+
+```bash
+docker builder prune -af
+docker image prune -af
+df -h / /var/lib/docker
+docker system df
 ```
 
 Verify the runtime without starting a forecast:

@@ -8,16 +8,31 @@ RUN npm run build
 FROM node:24-bookworm-slim AS runtime
 WORKDIR /app
 
+COPY deploy/eo_tides_minimal_init.py /tmp/eo_tides_minimal_init.py
+
 # Python is intentionally installed in the image while the 2.3 GB EOT20
 # constituent files stay outside it and are mounted read-only at /models.
 # 0.10.4 is the version already validated by this repository's real-model tests.
+# Upstream's package metadata includes Dask "complete", STAC, plotting and ML
+# dependencies for satellite workflows. TideLine only uses model.py/utils.py,
+# so install their required runtime set explicitly and replace only the eager
+# package initializer. The model calculation remains eo-tides + pyTMD.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 python3-venv libgomp1 ca-certificates \
   && python3 -m venv /opt/eot20-venv \
-  && /opt/eot20-venv/bin/pip install --no-cache-dir --upgrade pip \
-  && /opt/eot20-venv/bin/pip install --no-cache-dir "eo-tides==0.10.4" \
+  && /opt/eot20-venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
+  && /opt/eot20-venv/bin/pip install --no-cache-dir --no-deps "eo-tides==0.10.4" \
+  && /opt/eot20-venv/bin/pip install --no-cache-dir \
+       "colorama>=0.4.3" "geopandas>=0.10.0" "numpy>=1.26.0" \
+       "odc-geo>=0.4.7" "pandas>=2.2.0" "psutil>=6.0.0" \
+       "pyproj>=3.7.0" "pytmd>=2.2.8,<3.0.0" "scipy>=1.14.1" \
+       "shapely>=2.0.6" "timescale>=0.0.3" "tqdm>=4.55.0" \
+       "xarray>=2022.3.0" \
+  && cp /tmp/eo_tides_minimal_init.py /opt/eot20-venv/lib/python3.11/site-packages/eo_tides/__init__.py \
+  && /opt/eot20-venv/bin/python -c "from eo_tides.model import model_tides; from eo_tides.utils import list_models; import importlib.metadata as m; assert m.version('eo-tides') == '0.10.4'; print('eo-tides minimal runtime OK')" \
+  && ! /opt/eot20-venv/bin/python -c "import pyarrow" 2>/dev/null \
   && apt-get clean \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/* /root/.cache /tmp/eo_tides_minimal_init.py
 
 ENV NODE_ENV=production \
     PORT=8787 \
@@ -29,7 +44,8 @@ ENV NODE_ENV=production \
     NODE_OPTIONS=--max-old-space-size=256
 
 COPY package*.json ./
-RUN npm ci --include=dev --omit=optional \
+RUN npm ci --omit=dev --omit=optional \
+  && npm install --no-save --omit=dev --omit=optional "tsx@4.21.0" \
   && npm cache clean --force
 COPY --from=web-build /app/dist ./dist
 COPY --from=web-build /app/server ./server

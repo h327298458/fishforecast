@@ -21,6 +21,7 @@
     "tides:nsw:import": "tsx scripts/import-bom-nsw-tides.ts",
     "test:nsw-tides": "vitest run --config vitest.nsw-tides.config.ts"
     ,"test:e2e": "npm run build && node scripts/e2e-smoke.mjs"
+    ,"test:eot20:minimal": ".\\.venv-eot20\\Scripts\\python.exe scripts\\validate-eot20-minimal-runtime.py"
     ,"tides:compare:validate": "tsx scripts/validate-double-tides.ts"
     ,"observations:bom:validate": "tsx scripts/validate-bom-observations.ts"
   },
