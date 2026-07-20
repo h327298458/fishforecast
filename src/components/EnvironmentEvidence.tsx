@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Forecast, TideSource } from "../types";
 import { getEot20Tide, type Eot20Model } from "../api";
 import { canSelectEot20 } from "../domain/tideAvailability";
+import { compareTideSources } from "../domain/tideComparison";
 const time = (value: string | undefined, timezone: string) =>
   value
     ? new Intl.DateTimeFormat("zh-CN", {
@@ -42,13 +43,26 @@ export function EnvironmentEvidence({
   const officialAvailable = Boolean(official?.events.length);
   const comparison = (() => {
     if (storedComparison || !official?.events.length || !model.events?.length) return storedComparison;
-    const officialHigh = official.events.find((event) => event.type === "HIGH");
-    const officialLow = official.events.find((event) => event.type === "LOW");
-    const modelHigh = model.events.find((event) => event.type === "HIGH");
-    const modelLow = model.events.find((event) => event.type === "LOW");
-    if (!officialHigh || !modelHigh) return null;
-    return { officialHigh, modelHigh, officialLow: officialLow ?? null, modelLow: modelLow ?? null, timeDifferenceMinutes: Math.round(Math.abs(new Date(officialHigh.timeUtc).getTime() - new Date(modelHigh.timestampUtc).getTime()) / 60_000), heightDifferenceM: Math.abs(officialHigh.heightM - modelHigh.heightM), lowTimeDifferenceMinutes: officialLow && modelLow ? Math.round(Math.abs(new Date(officialLow.timeUtc).getTime() - new Date(modelLow.timestampUtc).getTime()) / 60_000) : null, officialConfidence: 0.9, modelConfidence: Number(model.confidence ?? 0), actualTideSourceUsed: forecast.tides.actualTideSourceUsed };
+    return compareTideSources({
+      officialEvents: official.events,
+      modelEvents: model.events,
+      referenceTimeUtc: forecast.generatedAtUtc,
+      officialDatum: String(official.station.datum ?? "Lowest Astronomical Tide (LAT)"),
+      modelDatum: "Mean Sea Level (MSL)",
+      officialConfidence: Number(official.station.distanceKm) > 100 ? 0.7 : 0.9,
+      modelConfidence: Number(model.confidence ?? 0),
+      actualTideSourceUsed: forecast.tides.actualTideSourceUsed,
+    });
   })();
+  const comparisonConflict = Boolean(
+    comparison && (
+      comparison.timeDifferenceMinutes > 45 ||
+      comparison.lowTimeDifferenceMinutes !== null && comparison.lowTimeDifferenceMinutes > 45 ||
+      comparison.tidalRangeDifferenceM !== null &&
+        comparison.officialTidalRangeM !== null &&
+        comparison.tidalRangeDifferenceM > Math.max(0.25, comparison.officialTidalRangeM * 0.25)
+    ),
+  );
   async function selectMode(next: Mode) {
     setMode(next);
     if (next === "official" || modelAvailable || !modelSelectable || modelLoading) return;
@@ -142,7 +156,7 @@ export function EnvironmentEvidence({
               <p>
                 下一事件：{model.events?.[0]?.type}{" "}
                 {time(model.events?.[0]?.timestampUtc, timezone)} ·{" "}
-                {model.events?.[0]?.heightM.toFixed(2)} m
+                {model.events?.[0]?.heightM.toFixed(2)} m（相对 MSL）
               </p>
               <small>
                 EOT20
@@ -161,42 +175,56 @@ export function EnvironmentEvidence({
             <div>
               <p>
                 BOM 高潮：{time(comparison.officialHigh.timeUtc, timezone)} ·{" "}
-                {comparison.officialHigh.heightM.toFixed(2)} m
+                {comparison.officialHigh.heightM.toFixed(2)} m（LAT）
               </p>
               <p>
                 EOT20 高潮：{time(comparison.modelHigh.timestampUtc, timezone)}{" "}
-                · {comparison.modelHigh.heightM.toFixed(2)} m
+                · {comparison.modelHigh.heightM.toFixed(2)} m（MSL）
               </p>
-              <p
-                className={
-                  comparison.timeDifferenceMinutes > 45 ? "conflict" : ""
-                }
-              >
-                高潮时间差 {comparison.timeDifferenceMinutes} 分钟 · 潮高差{" "}
-                {comparison.heightDifferenceM.toFixed(2)} m
+              <p className={comparisonConflict ? "conflict" : ""}>
+                高潮时间差 {comparison.timeDifferenceMinutes} 分钟
               </p>
               {comparison.officialLow && comparison.modelLow ? (
                 <>
                   <p>
                     BOM 低潮：{time(comparison.officialLow.timeUtc, timezone)} ·{" "}
-                    {comparison.officialLow.heightM.toFixed(2)} m
+                    {comparison.officialLow.heightM.toFixed(2)} m（LAT）
                   </p>
                   <p>
                     EOT20 低潮：
                     {time(comparison.modelLow.timestampUtc, timezone)} ·{" "}
-                    {comparison.modelLow.heightM.toFixed(2)} m
+                    {comparison.modelLow.heightM.toFixed(2)} m（MSL）
                   </p>
                   <p>低潮时间差 {comparison.lowTimeDifferenceMinutes} 分钟</p>
                 </>
               ) : null}
+              {comparison.officialTidalRangeM !== null && comparison.modelTidalRangeM !== null ? (
+                <p>
+                  同一潮周期潮差：BOM {comparison.officialTidalRangeM.toFixed(2)} m ·
+                  EOT20 {comparison.modelTidalRangeM.toFixed(2)} m ·
+                  差异 {comparison.tidalRangeDifferenceM?.toFixed(2)} m
+                </p>
+              ) : null}
+              {comparison.modelToOfficialDisplayOffsetM !== null ? (
+                <p>
+                  曲线显示对齐：EOT20 {comparison.modelToOfficialDisplayOffsetM >= 0 ? "+" : ""}
+                  {comparison.modelToOfficialDisplayOffsetM.toFixed(2)} m ·
+                  对齐后高潮残差 {comparison.alignedHighDifferenceM?.toFixed(2)} m ·
+                  低潮残差 {comparison.alignedLowDifferenceM?.toFixed(2)} m
+                </p>
+              ) : null}
+              <small>
+                BOM 高度基准为 {comparison.officialDatum}，EOT20 为 {comparison.modelDatum}。
+                两者原始潮高不能直接相减；上面的偏移只用于对齐同一潮周期的曲线形状，不是正式的 LAT↔MSL 垂直基准转换。
+              </small>
               <p>
                 官方源可信度 {Math.round(comparison.officialConfidence * 100)}%
                 · 模型可信度 {Math.round(comparison.modelConfidence * 100)}% ·
                 评分使用 {comparison.actualTideSourceUsed}
               </p>
-              {comparison.timeDifferenceMinutes > 45 ? (
+              {comparisonConflict ? (
                 <small>
-                  两个潮汐来源差异较大，可能受港湾、河口或局部地形影响，请结合现场水流观察。
+                  两个来源的事件时间或潮差差异较大，可能受参考港距离、港湾、河口或局部地形影响，请结合现场水流观察。
                 </small>
               ) : null}
             </div>
@@ -210,8 +238,8 @@ export function EnvironmentEvidence({
       <section className="evidence-card">
         <h3>BOM 官方警告</h3>
         {forecast.warnings.warnings?.length ? (
-          forecast.warnings.warnings.map((w) => (
-            <p key={w.warningId}>
+          forecast.warnings.warnings.map((w, index) => (
+            <p key={`${w.warningId}-${w.issuedAtUtc}-${index}`}>
               <a href={w.sourceUrl} target="_blank" rel="noreferrer">
                 {w.title}
               </a>

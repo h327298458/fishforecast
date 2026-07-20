@@ -121,7 +121,7 @@ export function TideChart({
                     height="150"
                   />
                   <text x={Math.min(geometry.x + 5, 665)} y={28 + index * 15}>
-                    窗口 {index + 1}
+                    {index === 0 ? "综合首选" : `备选 ${index}`}
                   </text>
                 </g>
               );

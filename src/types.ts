@@ -1,3 +1,5 @@
+import type { TideSourceComparison } from "./domain/tideComparison";
+
 export type SafetyStatus =
   "SAFE" | "CAUTION" | "HIGH_RISK" | "NOT_RECOMMENDED" | "UNKNOWN";
 export type LocationPoint = {
@@ -166,18 +168,7 @@ export type Forecast = {
         intervalMinutes: number;
       };
     };
-    comparison: null | {
-      timeDifferenceMinutes: number;
-      heightDifferenceM: number;
-      officialHigh: { timeUtc: string; heightM: number };
-      modelHigh: { timestampUtc: string; heightM: number };
-      officialLow: null|{ timeUtc:string;heightM:number };
-      modelLow: null|{ timestampUtc:string;heightM:number };
-      lowTimeDifferenceMinutes:number|null;
-      officialConfidence:number;
-      modelConfidence:number;
-      actualTideSourceUsed:TideSource;
-    };
+    comparison: TideSourceComparison<TideSource> | null;
   };
   warnings: {
     warnings?: Array<{

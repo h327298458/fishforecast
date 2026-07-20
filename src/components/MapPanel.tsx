@@ -46,9 +46,13 @@ export function MapPanel({
           pointRef.current ?? undefined,
           controller.signal,
         );
-        setResults(data);
-        setActiveIndex(data.length ? 0 : -1);
-        if (!data.length) setError("没有找到澳大利亚范围内的结果");
+        const uniqueResults = [...new Map(data.map((item) => [
+          `${item.id}:${item.latitude.toFixed(6)}:${item.longitude.toFixed(6)}`,
+          item,
+        ])).values()];
+        setResults(uniqueResults);
+        setActiveIndex(uniqueResults.length ? 0 : -1);
+        if (!uniqueResults.length) setError("没有找到澳大利亚范围内的结果");
       } catch (err) {
         if ((err as Error).name !== "AbortError")
           setError(err instanceof Error ? err.message : "搜索失败");
@@ -161,7 +165,7 @@ export function MapPanel({
                 role="option"
                 aria-selected={activeIndex === index}
                 className={activeIndex === index ? "active" : ""}
-                key={result.id}
+                key={`${result.id}:${result.latitude.toFixed(6)}:${result.longitude.toFixed(6)}`}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => choose(result)}
               >

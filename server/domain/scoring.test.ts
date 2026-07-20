@@ -33,6 +33,11 @@ it('uses phase, movement speed and high-low timing in the tide subscore',()=>{
   expect(moving?.reason).toContain('90 分钟');
 });
 
+it('keeps an exact safe tide turn usable instead of double-penalising slack water',()=>{
+  const slack=scoreTideCondition({...env,tidePhase:'slack',tideChangeRateMPerHour:0,minutesToNearestTideEvent:0});
+  expect(slack?.score).toBeGreaterThanOrEqual(60);
+});
+
 it('labels a completed calculation without tide as a transparent degraded score',()=>{
   const score=scoreHour({...env,tideHeightM:null,tidePhase:null,tideDataStatus:'UNAVAILABLE'});
   expect(score.scoreStatus).toBe('FINAL_NO_TIDE');
@@ -72,6 +77,33 @@ it('prefers a balanced high-confidence window over a marginally higher fish scor
   expect(window.startUtc).toBe('2026-01-01T02:00:00Z');
   expect(window.averageConfidenceScore).toBe(90);
   expect(window.averageComfortScore).toBe(90);
+});
+
+it('bridges one mild safe tide-turn dip between otherwise strong hours',()=>{
+  const base=scoreHour(env);
+  const values=[78,69,78,78];
+  const [window]=mergeWindows(values.map((fish,index)=>({
+    timestampUtc:`2026-01-01T${String(index).padStart(2,'0')}:00:00Z`,
+    score:{...base,safetyStatus:'SAFE' as const,safetyScore:90,comfortScore:85,fishingConditionScore:fish,dataConfidenceScore:80},
+  })));
+  expect(window.startUtc).toBe('2026-01-01T00:00:00Z');
+  expect(window.durationHours).toBe(4);
+});
+
+it('sorts recommended windows by overall decision quality rather than clock time',()=>{
+  const base=scoreHour(env);
+  const hours=[
+    {fish:74,confidence:60,comfort:62,safety:'SAFE'},
+    {fish:74,confidence:60,comfort:62,safety:'SAFE'},
+    {fish:60,confidence:80,comfort:80,safety:'CAUTION'},
+    {fish:60,confidence:80,comfort:80,safety:'CAUTION'},
+    {fish:82,confidence:86,comfort:90,safety:'SAFE'},
+    {fish:82,confidence:86,comfort:90,safety:'SAFE'},
+  ].map((value,index)=>({timestampUtc:`2026-01-01T${String(index).padStart(2,'0')}:00:00Z`,score:{...base,safetyStatus:value.safety as 'SAFE'|'CAUTION',safetyScore:90,fishingConditionScore:value.fish,dataConfidenceScore:value.confidence,comfortScore:value.comfort}}));
+  const windows=mergeWindows(hours);
+  expect(windows).toHaveLength(2);
+  expect(windows[0].startUtc).toBe('2026-01-01T04:00:00Z');
+  expect(windows[1].startUtc).toBe('2026-01-01T00:00:00Z');
 });
 
 it('scores an exposed headwind more conservatively than a sheltered spot',()=>{

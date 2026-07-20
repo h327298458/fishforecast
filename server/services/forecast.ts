@@ -30,6 +30,7 @@ import {
   shouldCalculateEot20ForForecast,
   type CanonicalTideSource,
 } from "./tideSelection.js";
+import { compareTideSources } from "../../src/domain/tideComparison.js";
 
 const baseSpot = {
   id: "selected-location",
@@ -529,20 +530,24 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
           timestampUtc: hour.timestampUtc,
           score: hour.score,
         })),
-    ).slice(0, 2),
+    ),
   }));
-  const officialNextHigh = official?.events.find(
-      (event) => event.type === "HIGH" && new Date(event.timeUtc) > start,
-    ),
-    officialNextLow = official?.events.find(
-      (event) => event.type === "LOW" && new Date(event.timeUtc) > start,
-    ),
-    modelNextHigh = eot20?.events.find(
-      (event) => event.type === "HIGH" && new Date(event.timestampUtc) > start,
-    ),
-    modelNextLow = eot20?.events.find(
-      (event) => event.type === "LOW" && new Date(event.timestampUtc) > start,
-    );
+  const tideComparison = official && eot20
+    ? compareTideSources({
+        officialEvents: official.events.map((event) => ({
+          type: event.type as "HIGH" | "LOW",
+          timeUtc: event.timeUtc,
+          heightM: event.heightM,
+        })),
+        modelEvents: eot20.events,
+        referenceTimeUtc: start.toISOString(),
+        officialDatum: String(official.station.datum ?? "Lowest Astronomical Tide (LAT)"),
+        modelDatum: "Mean Sea Level (MSL)",
+        officialConfidence: Number(officialStation?.distanceKm) > 100 ? 0.7 : 0.9,
+        modelConfidence: eot20.confidence,
+        actualTideSourceUsed: selectedTide,
+      })
+    : null;
   const initialForecastWind=liveWeather[0]?.windSpeedKmh ?? null;
   const forecastVsObservation = observation?.selected ? {
     forecastWindKmh: initialForecastWind,
@@ -623,39 +628,7 @@ export async function buildForecast(input: Input = {}, db?: Database.Database) {
         applicability: eot20Applicability(spot.spotType, spot.waterType),
         };
       })(),
-      comparison:
-        officialNextHigh && modelNextHigh
-          ? {
-              officialHigh: officialNextHigh,
-              modelHigh: modelNextHigh,
-              timeDifferenceMinutes: Math.round(
-                Math.abs(
-                  new Date(officialNextHigh.timeUtc).getTime() -
-                    new Date(modelNextHigh.timestampUtc).getTime(),
-                ) / 60_000,
-              ),
-              heightDifferenceM: Number(
-                Math.abs(
-                  officialNextHigh.heightM - modelNextHigh.heightM,
-                ).toFixed(2),
-              ),
-              officialLow: officialNextLow ?? null,
-              modelLow: modelNextLow ?? null,
-              lowTimeDifferenceMinutes:
-                officialNextLow && modelNextLow
-                  ? Math.round(
-                      Math.abs(
-                        new Date(officialNextLow.timeUtc).getTime() -
-                          new Date(modelNextLow.timestampUtc).getTime(),
-                      ) / 60_000,
-                    )
-                  : null,
-              officialConfidence:
-                Number(officialStation?.distanceKm) > 100 ? 0.7 : 0.9,
-              modelConfidence: eot20?.confidence ?? 0,
-              actualTideSourceUsed: selectedTide,
-            }
-          : null,
+      comparison: tideComparison,
     },
     warnings: warnings
       ? {

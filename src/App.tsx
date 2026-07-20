@@ -851,15 +851,15 @@ function RecommendedWindows({ windows, timezone, preliminary = false, degraded =
     <section className={`recommended-windows${preliminary ? " is-preliminary" : degraded ? " is-degraded" : ""}`}>
       <div>
         <h2>{preliminary ? "临时可用时段（待潮汐确认）" : degraded ? "无潮汐降级时段" : "推荐出钓窗口"}</h2>
-        <small>{preliminary ? "这些时段尚未计入潮汐，只用于先查看天气条件；EOT20 完成后可能调整或取消。" : degraded ? "当前没有可用潮汐源，时段只根据风、气压、日照、安全与可信度生成，不等同完整推荐。" : "先以安全状态 SAFE 硬筛选，再要求环境条件 ≥72、可信度 ≥55，并在连续 2–4 小时中综合鱼口环境、舒适度、安全分和可信度选择最协调的片段。"}</small>
+        <small>{preliminary ? "这些时段尚未计入潮汐，只用于先查看天气条件；EOT20 完成后可能调整或取消。" : degraded ? "当前没有可用潮汐源，时段只根据风、气压、日照、安全与可信度生成，不等同完整推荐。" : "先以安全状态 SAFE 硬筛选，再要求环境条件平均 ≥72、可信度 ≥55。允许一个安全且轻微低于阈值的转潮小时连接前后高分时段，并按鱼口环境、舒适度、安全、可信度和时长综合排序，最多给出 3 段。"}</small>
       </div>
       {windows.length ? (
         <div className="window-list">
-          {windows.map((window) => (
+          {windows.map((window, index) => (
             <article key={window.startUtc} className={`window-${window.rating.toLowerCase()}`}>
               <div className="window-title">
                 <b>{format(window.startUtc)}–{format(window.endUtc)}</b>
-                <em>{preliminary ? "待潮汐确认" : degraded ? "未计潮汐" : window.ratingLabel}</em>
+                <em>{preliminary ? "待潮汐确认" : degraded ? "未计潮汐" : index === 0 ? `综合首选 · ${window.ratingLabel}` : `备选 ${index} · ${window.ratingLabel}`}</em>
               </div>
               <span>{window.durationHours} 小时 · 环境 {window.averageScore} · 舒适 {window.averageComfortScore} · 可信度 {window.averageConfidenceScore}</span>
               <p>{preliminary ? "仅为天气与基础环境形成的临时时段，不应在潮汐完成前作为最终出钓建议。" : degraded ? "这是无潮汐数据下的降级时段，请结合现场水流和高低潮信息判断。" : window.summary}</p>

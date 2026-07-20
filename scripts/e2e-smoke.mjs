@@ -86,8 +86,8 @@ try {
   const scoreFlowText = await page.locator(".tide-score-flow").innerText();
   if (!scoreFlowText.includes("最终鱼口评分") || !scoreFlowText.includes("潮汐贡献") || !scoreFlowText.includes("+3")) throw new Error(`TIDE_SCORE_DELTA_NOT_VISIBLE:${scoreFlowText}`);
   if ((await page.locator(".tide-source-control button.active").innerText()) !== "EOT20 模型") throw new Error("AUTO_EOT20_SOURCE_NOT_VISIBLE");
-  const drawnWindowLabels = (await page.locator(".chart svg text").allTextContents()).filter((value) => value.startsWith("窗口"));
-  if (drawnWindowLabels.length !== 2) throw new Error(`ALL_WINDOWS_NOT_DRAWN:${JSON.stringify(drawnWindowLabels)}`);
+  const drawnWindowLabels = (await page.locator(".chart svg text").allTextContents()).filter((value) => value === "综合首选" || value.startsWith("备选"));
+  if (drawnWindowLabels.length !== 2 || drawnWindowLabels[0] !== "综合首选") throw new Error(`RANKED_WINDOWS_NOT_DRAWN:${JSON.stringify(drawnWindowLabels)}`);
   const forecastsBeforeMethodChange = forecastRequests.length;
   const eot20BeforeMethodChange = eot20Requests.length;
   await page.locator("label").filter({ hasText: "钓法" }).locator("select").selectOption("float");

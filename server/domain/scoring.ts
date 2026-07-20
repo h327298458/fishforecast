@@ -1,6 +1,6 @@
 import type { HourlyEnvironment, ScoreResult, SafetyStatus } from "./types.js";
 
-export const RULE_VERSION = "2026.07-context-method.6";
+export const RULE_VERSION = "2026.07-context-method.7";
 const clamp = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
 export const angularDifference = (a: number, b: number) => Math.abs(((a - b + 540) % 360) - 180);
 export const weightedScore = (items: Array<{ value: number | null; weight: number }>) => {
@@ -62,7 +62,9 @@ export function scoreMethodSuitability(env: HourlyEnvironment, evaluatedWind: nu
 
 export function scoreTideCondition(env: HourlyEnvironment) {
   if (env.tidePhase === null) return null;
-  const phaseScore = env.tidePhase === "rising" ? 82 : env.tidePhase === "falling" ? 72 : 55;
+  // A turning tide is not universally a poor fishing condition. Keep it below
+  // an actively moving tide, but do not double-penalise the exact high/low hour.
+  const phaseScore = env.tidePhase === "rising" ? 82 : env.tidePhase === "falling" ? 72 : 68;
   const rate = env.tideChangeRateMPerHour;
   const movementScore = rate === null || rate === undefined
     ? null
@@ -71,7 +73,7 @@ export function scoreTideCondition(env: HourlyEnvironment) {
   const timingScore = minutes === null || minutes === undefined
     ? null
     : minutes <= 30
-      ? 52
+      ? 70
       : minutes <= 120
         ? 78
         : minutes <= 240
@@ -208,7 +210,7 @@ function evaluateWindow(hours: Array<{ timestampUtc: string; score: ScoreResult 
       ? "鱼口环境达到门槛，但体感条件一般；请结合个人耐受程度决定。"
       : rating === "PRIORITY"
         ? "安全、鱼口环境、舒适度和可信度均较协调，可优先考虑。"
-        : "各项达到推荐门槛，可作为本日备选出钓时段。";
+        : "各项达到推荐门槛，可作为本日候选出钓时段。";
   const reasons = frequentWindowEvidence(hours, "positives");
   const cautions = frequentWindowEvidence(hours, "negatives");
   if (confidence < 65) cautions.unshift("窗口数据可信度一般");
@@ -235,33 +237,56 @@ function evaluateWindow(hours: Array<{ timestampUtc: string; score: ScoreResult 
 }
 
 export function mergeWindows(hours: Array<{ timestampUtc: string; score: ScoreResult }>, minScore = 72) {
-  const runs: Array<typeof hours> = [];
-  let current: typeof hours = [];
-  for (const hour of hours) {
-    const usable = hour.score.fishingConditionScore >= minScore && hour.score.dataConfidenceScore >= 55 && hour.score.safetyStatus === "SAFE";
-    if (usable) current.push(hour);
-    else if (current.length) {
-      runs.push(current);
-      current = [];
+  type Candidate = { hours: typeof hours; decisionIndex: number; startMs: number; endMs: number };
+  const candidates: Candidate[] = [];
+  const isContinuous = (candidate: typeof hours) => candidate.every((hour, index) => {
+    if (!index) return true;
+    const previous = new Date(candidate[index - 1].timestampUtc).getTime();
+    const current = new Date(hour.timestampUtc).getTime();
+    return !Number.isFinite(previous) || !Number.isFinite(current) || Math.abs(current - previous - 3_600_000) <= 60_000;
+  });
+  for (let length = 2; length <= Math.min(4, hours.length); length += 1) {
+    for (let startIndex = 0; startIndex <= hours.length - length; startIndex += 1) {
+      const candidate = hours.slice(startIndex, startIndex + length);
+      if (!isContinuous(candidate)) continue;
+      if (candidate.some((hour) => hour.score.safetyStatus !== "SAFE" || hour.score.dataConfidenceScore < 55)) continue;
+      const belowThreshold = candidate.filter((hour) => hour.score.fishingConditionScore < minScore);
+      // A single safe soft dip can connect the hours around a tide turn. It is
+      // never allowed in a two-hour window and cannot be more than six points
+      // below the ordinary threshold.
+      if (belowThreshold.length > 1 || (belowThreshold.length && length < 3)) continue;
+      if (belowThreshold.some((hour) => hour.score.fishingConditionScore < minScore - 6)) continue;
+      const fishing = averageWindowMetric(candidate, "fishingConditionScore");
+      if (fishing < minScore) continue;
+      const safety = averageWindowMetric(candidate, "safetyScore"),
+        comfort = averageWindowMetric(candidate, "comfortScore"),
+        confidence = averageWindowMetric(candidate, "dataConfidenceScore"),
+        // Prefer a still-good 3–4 hour usable period over a tiny numerical peak
+        // lasting only two hours. The bonus is deliberately modest and cannot
+        // rescue an unsafe, low-confidence or genuinely poor hour.
+        decisionIndex = fishing * 0.5 + confidence * 0.25 + comfort * 0.15 + safety * 0.1 + (length - 2) * 1.5,
+        startMs = new Date(candidate[0].timestampUtc).getTime(),
+        lastMs = new Date(candidate.at(-1)!.timestampUtc).getTime(),
+        endMs = Number.isFinite(lastMs) ? lastMs + 3_600_000 : Number.NaN;
+      candidates.push({ hours: candidate, decisionIndex, startMs, endMs });
     }
   }
-  if (current.length) runs.push(current);
-  const windows: FishingWindow[] = [];
-  for (const run of runs) {
-    if (run.length < 2) continue;
-    let best: { hours: typeof run; decisionIndex: number } | null = null;
-    for (let length = 2; length <= Math.min(4, run.length); length += 1) {
-      for (let startIndex = 0; startIndex <= run.length - length; startIndex += 1) {
-        const candidate = run.slice(startIndex, startIndex + length);
-        const fishing = averageWindowMetric(candidate, "fishingConditionScore"),
-          safety = averageWindowMetric(candidate, "safetyScore"),
-          comfort = averageWindowMetric(candidate, "comfortScore"),
-          confidence = averageWindowMetric(candidate, "dataConfidenceScore");
-        const decisionIndex = fishing * 0.5 + confidence * 0.25 + comfort * 0.15 + safety * 0.1 + (length - 2) * 0.35;
-        if (!best || decisionIndex > best.decisionIndex) best = { hours: candidate, decisionIndex };
-      }
-    }
-    if (best) windows.push(evaluateWindow(best.hours));
+  candidates.sort((a, b) =>
+    b.decisionIndex - a.decisionIndex ||
+    b.hours.length - a.hours.length ||
+    a.startMs - b.startMs,
+  );
+  const selected: Candidate[] = [];
+  const minimumGapMs = 2 * 3_600_000;
+  for (const candidate of candidates) {
+    const separated = selected.every((existing) => {
+      if (![candidate.startMs, candidate.endMs, existing.startMs, existing.endMs].every(Number.isFinite)) return false;
+      if (candidate.endMs <= existing.startMs) return existing.startMs - candidate.endMs >= minimumGapMs;
+      if (existing.endMs <= candidate.startMs) return candidate.startMs - existing.endMs >= minimumGapMs;
+      return false;
+    });
+    if (separated) selected.push(candidate);
+    if (selected.length === 3) break;
   }
-  return windows;
+  return selected.map((candidate) => evaluateWindow(candidate.hours));
 }
